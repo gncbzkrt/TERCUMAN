@@ -1,13 +1,13 @@
-TERCÜMAN v0.5.0 - TELEFONDAN GITHUB İLE APK
+TERCÜMAN v0.6.0 - TELEFONDAN GITHUB İLE APK
 
 1) Bu paketin içindeki DOSYALARI mevcut TERCUMAN GitHub reposunun köküne kopyala.
 2) Termux'ta repo klasörüne gir.
 3) `git add -A`
-4) `git commit -m "TERCUMAN v0.5.0"`
+4) `git commit -m "TERCUMAN v0.6.0"`
 5) `git push`
 6) GitHub Actions -> `TERCUMAN APK` çalışır.
-7) Yeşil tamamlanınca Artifacts bölümünden `TERCUMAN-v0.5.0-APK` paketini indir.
-8) Paket içindeki `TERCUMAN-v0.5.0-debug.apk` dosyasını kur.
+7) Yeşil tamamlanınca Artifacts bölümünden `TERCUMAN-v0.6.0-APK` paketini indir.
+8) Paket içindeki `TERCUMAN-v0.6.0-debug.apk` dosyasını kur.
 
 İLK AÇILIŞ
 - Mikrofon iznini ver.

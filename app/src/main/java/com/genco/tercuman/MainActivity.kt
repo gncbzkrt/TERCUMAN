@@ -178,7 +178,7 @@ class MainActivity : AppCompatActivity() {
         col.addView(card("TÜRKÇE", "Çeviri burada görünecek.").also { translatedText = it.getChildAt(0) as TextView }, lp())
 
         col.addView(text("Bölünmüş ekran için tasarlandı: başka uygulamayı üstte/yan tarafta açıp TERCÜMAN'ı diğer yarıda kullanabilirsin.", 12f, Color.rgb(170,184,197)))
-        col.addView(text("Sesli çıktı v0.5'te varsayılan olarak kapalıdır; önce çevirinin stabil çalışmasını doğruluyoruz. Açarsan seçtiğin doğal ses/ton kullanılır.", 12f, Color.rgb(170,184,197)))
+        col.addView(text("Sesli çıktı v0.6'da varsayılan olarak kapalıdır; önce çevirinin stabil çalışmasını doğruluyoruz. Açarsan seçtiğin doğal ses/ton kullanılır.", 12f, Color.rgb(170,184,197)))
         col.addView(text("Telefon içi ses: Android kaynak uygulamanın yakalamaya izin vermesine bağlıdır. Sessiz akış açıkça bildirilecektir.", 12f, Color.rgb(170,184,197)))
         root.addView(col)
         return root
