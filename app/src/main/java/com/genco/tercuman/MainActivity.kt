@@ -43,6 +43,7 @@ class MainActivity : AppCompatActivity() {
 
     private var micOn = false
     private var phoneOn = false
+    private var translationReady = false
     private val chunkQueue = Channel<File>(capacity = Channel.UNLIMITED)
 
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { updateStatus() }
@@ -125,7 +126,7 @@ class MainActivity : AppCompatActivity() {
 
         col.addView(card("ORİJİNAL", "Konuşma burada görünecek.").also { sourceText = it.getChildAt(0) as TextView }, lp())
         col.addView(card("TÜRKÇE", "Çeviri burada görünecek.").also { translatedText = it.getChildAt(0) as TextView }, lp())
-        col.addView(text("v0.8.0: Çalışan v0.1 ses→Whisper→çeviri hattı geri getirildi. Önizleme geçici olarak Android Türkçe TTS kullanır; Supertonic çeviri akışına bağlanmaz.", 12f, Color.rgb(170,184,197)))
+        col.addView(text("v0.9.0: Whisper → cihaz içi ML Kit çeviri. İngilizce→Türkçe modeli önce hazırlanır; her cümlede yeniden indirilmez. Önizleme Android Türkçe TTS kullanır.", 12f, Color.rgb(170,184,197)))
         col.addView(text("Telefon içi ses, Android'in kaynak uygulamanın yakalanmasına izin vermesine bağlıdır.", 12f, Color.rgb(170,184,197)))
         root.addView(col)
         return root
@@ -161,16 +162,21 @@ class MainActivity : AppCompatActivity() {
                     status.text = "Whisper indiriliyor…"
                     modelManager.ensureWhisper { p -> runOnUiThread { status.text = "Whisper: %$p" } }
                 }
-                status.text = "Whisper hazır ✓ Çeviri kullanılabilir."
-                modelButton.text = "WHISPER HAZIR ✓"
+                status.text = "Whisper hazır ✓ • Çeviri modeli hazırlanıyor…"
+                translator.prepareEnglishTurkish { msg -> runOnUiThread { status.text = msg } }
+                translationReady = true
+                status.text = "WHISPER ✓ • İNGİLİZCE → TÜRKÇE ✓"
+                modelButton.text = "AI HAZIR ✓"
             } catch (e: Exception) {
-                status.text = "Model hazırlama hatası: ${e.message ?: "bilinmeyen hata"}"
+                val reason = e.message ?: e.javaClass.simpleName
+                status.text = "⚠️ Çeviri modeli hazırlanamadı: $reason"
+                translatedText.text = "TÜRKÇE\n\nÇeviri modeli hazır değil.\nAI MODELİNİ HAZIRLA'ya tekrar dokunun."
             } finally { modelButton.isEnabled = true }
         }
     }
 
     private fun toggleMic() {
-        if (!modelManager.whisperReady()) { status.text = "Önce AI MODELİNİ HAZIRLA."; return }
+        if (!modelManager.whisperReady() || !translationReady) { status.text = "Önce AI MODELİNİ HAZIRLA."; return }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { requestBasePermissions(); return }
         if (micOn) {
             micChunker.stop(); micOn = false; micButton.text = "🎤 DIŞ SES"; status.text = "Mikrofon durduruldu."
@@ -183,7 +189,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun togglePhone() {
-        if (!modelManager.whisperReady()) { status.text = "Önce AI MODELİNİ HAZIRLA."; return }
+        if (!modelManager.whisperReady() || !translationReady) { status.text = "Önce AI MODELİNİ HAZIRLA."; return }
         if (phoneOn) stopPhoneIfNeeded() else {
             micChunker.stop(); micOn = false; micButton.text = "🎤 DIŞ SES"
             val mgr = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
@@ -214,7 +220,9 @@ class MainActivity : AppCompatActivity() {
                 if (original.length < 2) continue
                 sourceText.text = "ORİJİNAL\n\n$original"
                 status.text = "🔄 Türkçeye çevriliyor…"
-                val (tr, lang) = translator.toTurkish(original)
+                val (tr, lang) = translator.toTurkish(original) { msg ->
+                    runOnUiThread { status.text = "🔄 $msg" }
+                }
                 translatedText.text = "TÜRKÇE  •  ${lang.uppercase()}\n\n$tr"
                 status.text = "🇹🇷 Çeviri hazır ✓"
                 if (speakSwitch.isChecked && ttsReady) {
@@ -234,7 +242,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateStatus() {
-        status.text = if (!modelManager.whisperReady()) "İlk kullanım: AI MODELİNİ HAZIRLA'ya dokun." else "Hazır ✓"
+        status.text = if (!modelManager.whisperReady() || !translationReady) "İlk kullanım: AI MODELİNİ HAZIRLA'ya dokun." else "Hazır ✓"
     }
 
     override fun onDestroy() {
