@@ -30,22 +30,12 @@ class TranslationEngine {
     }
 
     suspend fun toTurkish(text: String, onStatus: (String) -> Unit = {}): Pair<String, String> {
-        if (text.isBlank()) return "" to "und"
+        if (text.isBlank()) return "" to "en"
 
-        val detected = withTimeout(10_000L) {
-            languageId.identifyLanguage(text).await()
-        }
-        val source = if (detected == "und") "en" else detected
-        if (source == "tr") return text to source
-
-        val supported = TranslateLanguage.fromLanguageTag(source)
-        if (supported == null) {
-            // Whisper'ın belirsiz/desteklenmeyen dil etiketlerinde İngilizce'yi
-            // güvenli varsayılan olarak kullan.
-            return translateWith("en", text, onStatus) to "en"
-        }
-
-        return translateWith(source, text, onStatus) to source
+        // v0.10: TERCUMAN'in mevcut test/ana senaryosu Ingilizce kaynak iceriktir.
+        // Whisper da language="en" ile zorlandigi icin ML Kit Language ID'nin
+        // kisa parcalari Japonca vb. yanlis siniflandirmasi ceviriyi bozmaz.
+        return translateWith("en", text, onStatus) to "en"
     }
 
     private suspend fun translateWith(sourceTag: String, text: String, onStatus: (String) -> Unit): String {

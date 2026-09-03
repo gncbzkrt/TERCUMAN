@@ -126,7 +126,7 @@ class MainActivity : AppCompatActivity() {
 
         col.addView(card("ORİJİNAL", "Konuşma burada görünecek.").also { sourceText = it.getChildAt(0) as TextView }, lp())
         col.addView(card("TÜRKÇE", "Çeviri burada görünecek.").also { translatedText = it.getChildAt(0) as TextView }, lp())
-        col.addView(text("v0.9.0: Whisper → cihaz içi ML Kit çeviri. İngilizce→Türkçe modeli önce hazırlanır; her cümlede yeniden indirilmez. Önizleme Android Türkçe TTS kullanır.", 12f, Color.rgb(170,184,197)))
+        col.addView(text("v0.10.0: İngilizce kaynak modu. Whisper language=en ile çalışır; kısa ses parçalarında Japonca vb. yanlış dil algılaması engellenir. İngilizce→Türkçe ML Kit modeli önceden hazırlanır.", 12f, Color.rgb(170,184,197)))
         col.addView(text("Telefon içi ses, Android'in kaynak uygulamanın yakalanmasına izin vermesine bağlıdır.", 12f, Color.rgb(170,184,197)))
         root.addView(col)
         return root
@@ -162,10 +162,10 @@ class MainActivity : AppCompatActivity() {
                     status.text = "Whisper indiriliyor…"
                     modelManager.ensureWhisper { p -> runOnUiThread { status.text = "Whisper: %$p" } }
                 }
-                status.text = "Whisper hazır ✓ • Çeviri modeli hazırlanıyor…"
+                status.text = "Whisper hazır ✓ • İngilizce kaynak modu hazırlanıyor…"
                 translator.prepareEnglishTurkish { msg -> runOnUiThread { status.text = msg } }
                 translationReady = true
-                status.text = "WHISPER ✓ • İNGİLİZCE → TÜRKÇE ✓"
+                status.text = "WHISPER ✓ • İNGİLİZCE KAYNAK ✓ • TÜRKÇE ÇEVİRİ ✓"
                 modelButton.text = "AI HAZIR ✓"
             } catch (e: Exception) {
                 val reason = e.message ?: e.javaClass.simpleName
