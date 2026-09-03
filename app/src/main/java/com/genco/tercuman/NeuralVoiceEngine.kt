@@ -15,9 +15,9 @@ import kotlin.math.roundToInt
 class NeuralVoiceEngine(private val manager: ModelManager) {
     data class VoiceProfile(val label: String, val sid: Int, val speed: Float)
 
-    // Supertonic 3 toplam 10 sabit ses stili sunar: M1-M5 ve F1-F5.
-    // Sherpa paketindeki speaker dizilimi upstream model sırasını izler: M1..M5, F1..F5.
-    // Arayüzde kullanıcı isteğine uygun olarak kadın sesleri önce gösterilir.
+    // Supertonic 3 voice.bin sıralaması M1..M5 ardından F1..F5'tir.
+    // Bu nedenle sid 0..4 erkek, sid 5..9 kadın sesleridir.
+    // UI'da kadınları önce gösteriyoruz ama gerçek SID'ler model sırasına göre veriliyor.
     val profiles = listOf(
         VoiceProfile("Kadın 1 (F1)", 5, 1.02f), VoiceProfile("Kadın 2 (F2)", 6, 1.00f),
         VoiceProfile("Kadın 3 (F3)", 7, 0.98f), VoiceProfile("Kadın 4 (F4)", 8, 1.04f),
@@ -27,7 +27,7 @@ class NeuralVoiceEngine(private val manager: ModelManager) {
     )
 
     private var tts: OfflineTts? = null
-    private var track: AudioTrack? = null
+    @Volatile private var track: AudioTrack? = null
 
     private fun initIfNeeded(): OfflineTts {
         tts?.let { return it }
@@ -55,16 +55,59 @@ class NeuralVoiceEngine(private val manager: ModelManager) {
         if (text.isBlank()) return@withContext
         val engine = initIfNeeded()
         val safeSid = if (engine.numSpeakers() > 0) profile.sid.coerceIn(0, engine.numSpeakers() - 1) else 0
-        val generated = engine.generateWithConfig(
-            text = text.take(450),
-            config = GenerationConfig(
-                sid = safeSid,
-                speed = profile.speed,
-                numSteps = 6,
-                extra = mapOf("lang" to "tr")
+
+        // Canlı mod: TTS üretimi tamamlanmadan ilk ses paketini AudioTrack'e yaz.
+        // Böylece tüm cümlenin bitmesini beklemeden konuşma başlayabilir.
+        val sampleRate = engine.sampleRate()
+        val min = AudioTrack.getMinBufferSize(
+            sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT
+        ).coerceAtLeast(8192)
+        stop()
+        val localTrack = AudioTrack.Builder()
+            .setAudioAttributes(
+                AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .setAllowedCapturePolicy(AudioAttributes.ALLOW_CAPTURE_BY_NONE)
+                    .build()
             )
-        )
-        playFloatPcm(generated.samples, generated.sampleRate)
+            .setAudioFormat(
+                AudioFormat.Builder().setSampleRate(sampleRate)
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build()
+            )
+            .setBufferSizeInBytes(min * 4)
+            .setTransferMode(AudioTrack.MODE_STREAM)
+            .build()
+        track = localTrack
+        localTrack.play()
+
+        try {
+            engine.generateWithConfigAndCallback(
+                text = text.take(260),
+                config = GenerationConfig(
+                    sid = safeSid,
+                    speed = profile.speed,
+                    // 4 adım canlı kullanım için hız öncelikli ayardır.
+                    numSteps = 4,
+                    extra = mapOf("lang" to "tr")
+                )
+            ) { samples ->
+                val current = track
+                if (current !== localTrack) return@generateWithConfigAndCallback 0
+                val pcm = ShortArray(samples.size) { i ->
+                    (samples[i].coerceIn(-1f, 1f) * Short.MAX_VALUE).roundToInt().toShort()
+                }
+                val written = runCatching { current.write(pcm, 0, pcm.size) }.getOrDefault(-1)
+                if (written < 0) 0 else 1
+            }
+        } finally {
+            // Track nesnesini yalnızca hâlâ bizim ürettiğimiz ses ise kapat.
+            if (track === localTrack) {
+                runCatching { localTrack.stop() }
+                runCatching { localTrack.release() }
+                track = null
+            }
+        }
     }
 
     private fun playFloatPcm(samples: FloatArray, sampleRate: Int) {
@@ -78,7 +121,10 @@ class NeuralVoiceEngine(private val manager: ModelManager) {
         track = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    // Telefon içi ses yakalama modunda TERCÜMAN'ın kendi TTS çıktısını dışarı vermiyoruz.
+                    .setAllowedCapturePolicy(AudioAttributes.ALLOW_CAPTURE_BY_NONE)
+                    .build()
             )
             .setAudioFormat(
                 AudioFormat.Builder().setSampleRate(sampleRate)

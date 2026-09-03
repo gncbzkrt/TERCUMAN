@@ -6,14 +6,17 @@ import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
 import androidx.core.content.ContextCompat
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
+import kotlin.math.sqrt
 
 class MicrophoneChunker(private val context: Context, private val onChunk: (File) -> Unit) {
     private val running = AtomicBoolean(false)
     private var recorder: AudioRecord? = null
+    private var echoCanceler: AcousticEchoCanceler? = null
 
     fun start() {
         if (running.getAndSet(true)) return
@@ -21,8 +24,10 @@ class MicrophoneChunker(private val context: Context, private val onChunk: (File
             running.set(false)
             error("Mikrofon izni gerekli")
         }
+
         val sampleRate = 16000
         val min = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        require(min > 0) { "Mikrofon ses formatı desteklenmiyor." }
         val record = AudioRecord(
             MediaRecorder.AudioSource.VOICE_RECOGNITION,
             sampleRate,
@@ -30,10 +35,18 @@ class MicrophoneChunker(private val context: Context, private val onChunk: (File
             AudioFormat.ENCODING_PCM_16BIT,
             maxOf(min * 2, sampleRate * 2)
         )
+        check(record.state == AudioRecord.STATE_INITIALIZED) { "Mikrofon başlatılamadı." }
         recorder = record
+        if (AcousticEchoCanceler.isAvailable()) {
+            echoCanceler = runCatching {
+                AcousticEchoCanceler.create(record.audioSessionId)?.apply { enabled = true }
+            }.getOrNull()
+        }
         record.startRecording()
+
         thread(name = "tercuman-mic") {
-            val chunkSamples = sampleRate * 4
+            // 1.2 sn pencere: 2 sn'ye göre daha erken sonuç verir.
+            val chunkSamples = (sampleRate * 1.2f).toInt()
             val buf = ShortArray(2048)
             val collected = ArrayList<Short>(chunkSamples)
             try {
@@ -42,8 +55,10 @@ class MicrophoneChunker(private val context: Context, private val onChunk: (File
                     if (n <= 0) continue
                     for (i in 0 until n) collected.add(buf[i])
                     if (collected.size >= chunkSamples) {
-                        val data = ShortArray(collected.size) { collected[it] }
+                        val data = ShortArray(chunkSamples) { collected[it] }
                         collected.clear()
+                        // Sessiz pencereleri Whisper'a göndermiyoruz.
+                        if (rms(data) < 450.0) continue
                         val file = File(context.cacheDir, "mic_${System.currentTimeMillis()}.wav")
                         WavUtils.writePcm16Mono(file, data, sampleRate)
                         onChunk(file)
@@ -56,9 +71,20 @@ class MicrophoneChunker(private val context: Context, private val onChunk: (File
         }
     }
 
+    private fun rms(data: ShortArray): Double {
+        var sum = 0.0
+        for (s in data) {
+            val v = s.toDouble()
+            sum += v * v
+        }
+        return sqrt(sum / data.size.coerceAtLeast(1))
+    }
+
     fun stop() {
         running.set(false)
         runCatching { recorder?.stop() }
+        runCatching { echoCanceler?.release() }
+        echoCanceler = null
         recorder = null
     }
 }

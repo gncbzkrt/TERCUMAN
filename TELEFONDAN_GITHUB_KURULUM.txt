@@ -5,9 +5,9 @@ TERCÜMAN - TELEFONDAN GITHUB İLE APK
 3) .github/workflows/android-build.yml yolu aynen korunmalı.
 4) Repo -> Actions -> TERCUMAN APK -> Run workflow.
 5) İşlem yeşil tamamlanınca aynı Actions çalışmasının altındaki Artifacts bölümünden:
-   TERCUMAN-v0.1.0-APK
+   TERCUMAN-v0.3.0-APK
    dosyasını indir.
-6) ZIP artifact içindeki TERCUMAN-v0.1.0-debug.apk dosyasını telefona kur.
+6) ZIP artifact içindeki TERCUMAN-v0.3.0-debug.apk dosyasını telefona kur.
 
 İLK AÇILIŞ
 - Mikrofon iznini ver.
@@ -18,3 +18,6 @@ TERCÜMAN - TELEFONDAN GITHUB İLE APK
 
 NOT:
 Bazı uygulamalar kendi sesinin yakalanmasına Android seviyesinde izin vermez. Bu uygulamalarda telefon sesi modu çalışmaz; dış ses/mikrofon modu kullanılabilir.
+
+
+Güncelleme (v0.3.0): Mevcut TERCUMAN deposundaki dosyaları bu paketle değiştir, ardından git add -A && git commit -m "TERCUMAN v0.3.0" && git push.

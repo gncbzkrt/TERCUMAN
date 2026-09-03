@@ -39,7 +39,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var voiceSpinner: Spinner
     private lateinit var speakSwitch: Switch
 
-    private val chunkQueue = Channel<File>(capacity = Channel.UNLIMITED)
+    private enum class CaptureMode { NONE, MIC, PHONE }
+
+    // Canlı çeviride eski parçaların kuyrukta birikmesine izin vermiyoruz.
+    // İşlem yetişemezse en eski parça atılır; böylece çeviri geriden gelmez.
+    private val chunkQueue = Channel<File>(capacity = 1)
+    private data class SpeechTask(val text: String, val profile: NeuralVoiceEngine.VoiceProfile)
+    private val ttsQueue = Channel<SpeechTask>(capacity = 1)
+    @Volatile private var captureMode = CaptureMode.NONE
     private var micOn = false
     private var phoneOn = false
 
@@ -51,7 +58,14 @@ class MainActivity : AppCompatActivity() {
 
     private val playbackReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            intent?.getStringExtra(PlaybackCaptureService.EXTRA_PATH)?.let { chunkQueue.trySend(File(it)) }
+            when (intent?.action) {
+                PlaybackCaptureService.ACTION_CHUNK -> intent.getStringExtra(PlaybackCaptureService.EXTRA_PATH)?.let {
+                    enqueueChunk(File(it), CaptureMode.PHONE)
+                }
+                PlaybackCaptureService.ACTION_STATUS -> intent.getStringExtra(PlaybackCaptureService.EXTRA_STATUS)?.let {
+                    if (captureMode == CaptureMode.PHONE) status.text = it
+                }
+            }
         }
     }
 
@@ -61,11 +75,15 @@ class MainActivity : AppCompatActivity() {
         whisper = WhisperEngine(this, modelManager)
         translator = TranslationEngine()
         voice = NeuralVoiceEngine(modelManager)
-        micChunker = MicrophoneChunker(this) { chunkQueue.trySend(it) }
+        micChunker = MicrophoneChunker(this) { enqueueChunk(it, CaptureMode.MIC) }
         setContentView(buildUi())
         requestBasePermissions()
         registerPlaybackReceiver()
+        // Önceki Activity örneğinden kalmış bir playback capture servisi varsa
+        // yeni oturum bunu otomatik olarak kullanmamalı. Kullanıcı butona basana kadar NONE.
+        stopPlaybackServiceSilently()
         lifecycleScope.launch { processQueue() }
+        lifecycleScope.launch { processTtsQueue() }
         updateStatus()
     }
 
@@ -100,7 +118,16 @@ class MainActivity : AppCompatActivity() {
             setSelection(0)
         }
         voiceRow.addView(voiceSpinner, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        speakSwitch = Switch(this).apply { text = "Sesli"; setTextColor(Color.WHITE); isChecked = true }
+        speakSwitch = Switch(this).apply {
+            text = "Sesli"
+            setTextColor(Color.WHITE)
+            isChecked = true
+            setOnCheckedChangeListener { _, checked ->
+                if (!checked) {
+                    clearTtsQueue()
+                }
+            }
+        }
         voiceRow.addView(speakSwitch)
         col.addView(voiceRow, lp())
 
@@ -123,7 +150,7 @@ class MainActivity : AppCompatActivity() {
         col.addView(card("TÜRKÇE", "Çeviri burada görünecek.").also { translatedText = it.getChildAt(0) as TextView }, lp())
 
         col.addView(text("Bölünmüş ekran için tasarlandı: başka uygulamayı üstte/yan tarafta açıp TERCÜMAN'ı diğer yarıda kullanabilirsin.", 12f, Color.rgb(170,184,197)))
-        col.addView(text("Not: Bazı uygulamalar Android güvenlik politikası nedeniyle kendi medya seslerinin yakalanmasına izin vermez.", 12f, Color.rgb(170,184,197)))
+        col.addView(text("Not: Telefon içi ses yakalama Android'in kaynak uygulama politikasına bağlıdır. Sessiz akışta uygulama bunu açıkça bildirir.", 12f, Color.rgb(170,184,197)))
         root.addView(col)
         return root
     }
@@ -174,58 +201,163 @@ class MainActivity : AppCompatActivity() {
             requestBasePermissions(); return
         }
         if (micOn) {
-            micChunker.stop(); micOn = false; micButton.text = "🎤 DIŞ SES"; status.text = "Mikrofon durduruldu."
+            micChunker.stop()
+            micOn = false
+            if (captureMode == CaptureMode.MIC) captureMode = CaptureMode.NONE
+            clearChunkQueue()
+            clearTtsQueue()
+            micButton.text = "🎤 DIŞ SES"
+            status.text = "Mikrofon durduruldu."
         } else {
-            stopPhoneIfNeeded(); micChunker.start(); micOn = true; micButton.text = "⏹ DIŞ SESİ DURDUR"; status.text = "Dış ses dinleniyor…"
+            stopPhoneIfNeeded()
+            clearChunkQueue()
+            clearTtsQueue()
+            captureMode = CaptureMode.MIC
+            try {
+                micChunker.start()
+                micOn = true
+                micButton.text = "⏹ DIŞ SESİ DURDUR"
+                status.text = "Dış ses dinleniyor…"
+            } catch (e: Exception) {
+                captureMode = CaptureMode.NONE
+                status.text = e.message ?: "Mikrofon başlatılamadı."
+            }
         }
     }
 
     private fun togglePhone() {
         if (!modelManager.whisperReady()) { status.text = "Önce AI modellerini hazırla."; return }
-        if (phoneOn) stopPhoneIfNeeded() else {
-            micChunker.stop(); micOn = false; micButton.text = "🎤 DIŞ SES"
+        if (phoneOn) {
+            stopPhoneIfNeeded()
+        } else {
+            // Yeni MediaProjection oturumu açmadan önce olası eski servisi tamamen kapat.
+            stopPlaybackServiceSilently()
+            micChunker.stop()
+            micOn = false
+            captureMode = CaptureMode.NONE
+            clearChunkQueue()
+            clearTtsQueue()
+            micButton.text = "🎤 DIŞ SES"
             val mgr = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             projectionLauncher.launch(mgr.createScreenCaptureIntent())
         }
     }
 
     private fun startPlaybackService(code: Int, data: Intent) {
+        clearChunkQueue()
+        captureMode = CaptureMode.PHONE
         val i = Intent(this, PlaybackCaptureService::class.java)
             .putExtra(PlaybackCaptureService.EXTRA_RESULT_CODE, code)
             .putExtra(PlaybackCaptureService.EXTRA_RESULT_DATA, data)
         ContextCompat.startForegroundService(this, i)
-        phoneOn = true; phoneButton.text = "⏹ TELEFON SESİNİ DURDUR"; status.text = "Telefon medya sesi dinleniyor…"
+        phoneOn = true
+        phoneButton.text = "⏹ TELEFON SESİNİ DURDUR"
+        status.text = "Telefon medya sesi dinleniyor…"
     }
 
     private fun stopPhoneIfNeeded() {
-        if (!phoneOn) return
-        startService(Intent(this, PlaybackCaptureService::class.java).setAction(PlaybackCaptureService.STOP_ACTION))
-        phoneOn = false; phoneButton.text = "📱 TELEFON SESİ"; status.text = "Telefon sesi durduruldu."
+        val wasPhone = phoneOn
+        captureMode = CaptureMode.NONE
+        clearChunkQueue()
+        clearTtsQueue()
+        // Servisi doğrudan durdur: eski MediaProjection oturumunun yeniden canlanmasını engeller.
+        stopPlaybackServiceSilently()
+        phoneOn = false
+        phoneButton.text = "📱 TELEFON SESİ"
+        if (wasPhone) status.text = "Telefon sesi durduruldu."
+    }
+
+    private fun stopPlaybackServiceSilently() {
+        runCatching {
+            stopService(Intent(this, PlaybackCaptureService::class.java))
+        }
+    }
+
+    private fun enqueueTts(text: String) {
+        if (text.isBlank() || captureMode == CaptureMode.NONE || !speakSwitch.isChecked) return
+        // TTS de canlı kuyruk mantığı kullanır: yeni çeviri gelince eski ses kesilir.
+        voice.stop()
+        val task = SpeechTask(text.take(260), selectedVoice())
+        val old = ttsQueue.tryReceive().getOrNull()
+        if (old != null) { /* eski metin artık oynatılmayacak */ }
+        if (ttsQueue.trySend(task).isFailure) {
+            // Tek yuvalı kuyruk doluysa son bir kez eski öğeyi değiştir.
+            ttsQueue.tryReceive().getOrNull()
+            ttsQueue.trySend(task)
+        }
+    }
+
+    private fun enqueueChunk(file: File, source: CaptureMode) {
+        if (!file.exists() || captureMode != source) {
+            file.delete()
+            return
+        }
+        if (chunkQueue.trySend(file).isSuccess) return
+
+        // İşlemci yetişemiyorsa bekleyen eski parçayı at, en yeni parçayı tut.
+        val stale = chunkQueue.tryReceive().getOrNull()
+        stale?.delete()
+        if (chunkQueue.trySend(file).isFailure) file.delete()
+    }
+
+    private fun clearChunkQueue() {
+        while (true) {
+            val stale = chunkQueue.tryReceive().getOrNull() ?: break
+            stale.delete()
+        }
+    }
+
+    private fun clearTtsQueue() {
+        while (ttsQueue.tryReceive().getOrNull() != null) { }
+        voice.stop()
+    }
+
+    private suspend fun processTtsQueue() {
+        for (task in ttsQueue) {
+            if (captureMode == CaptureMode.NONE || !speakSwitch.isChecked) continue
+            runCatching {
+                voice.speakTurkish(task.text, task.profile)
+            }.onFailure {
+                if (captureMode != CaptureMode.NONE) status.text = "Ses hatası: ${it.message ?: "bilinmeyen hata"}"
+            }
+        }
     }
 
     private suspend fun processQueue() {
         for (wav in chunkQueue) {
             try {
+                // Kaynak kapatıldıysa veya başka moda geçildiyse eski parçayı kesinlikle işleme.
+                if (captureMode == CaptureMode.NONE) {
+                    wav.delete()
+                    continue
+                }
                 status.text = "Dinledim, çözüyorum…"
                 val original = withContext(Dispatchers.Default) { whisper.transcribe(wav) }
                 wav.delete()
-                if (original.length < 2) continue
+                if (captureMode == CaptureMode.NONE || original.length < 2) continue
                 sourceText.text = "ORİJİNAL\n\n$original"
                 status.text = "Türkçeye çevriliyor…"
                 val (tr, lang) = translator.toTurkish(original)
+                if (captureMode == CaptureMode.NONE) continue
                 translatedText.text = "TÜRKÇE  •  ${lang.uppercase()}\n\n$tr"
                 status.text = "Canlı çeviri aktif ✓"
-                if (speakSwitch.isChecked && modelManager.supertonicReady()) {
-                    withContext(Dispatchers.Default) { voice.speakTurkish(tr, selectedVoice()) }
+                if (speakSwitch.isChecked && modelManager.supertonicReady() && captureMode != CaptureMode.NONE) {
+                    // STT + çeviri TTS'yi beklemez. TTS ayrı işçide çalışır ve
+                    // yeni çeviri geldiğinde eski ses kesilerek en güncel metin oynatılır.
+                    enqueueTts(tr)
                 }
             } catch (e: Exception) {
-                status.text = "Çeviri hatası: ${e.message}"
+                wav.delete()
+                if (captureMode != CaptureMode.NONE) status.text = "Çeviri hatası: ${e.message}"
             }
         }
     }
 
     private fun registerPlaybackReceiver() {
-        val filter = IntentFilter(PlaybackCaptureService.ACTION_CHUNK)
+        val filter = IntentFilter().apply {
+            addAction(PlaybackCaptureService.ACTION_CHUNK)
+            addAction(PlaybackCaptureService.ACTION_STATUS)
+        }
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(playbackReceiver, filter, RECEIVER_NOT_EXPORTED)
         else @Suppress("DEPRECATION") registerReceiver(playbackReceiver, filter)
     }
@@ -238,7 +370,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        micChunker.stop(); stopPhoneIfNeeded(); voice.release(); whisper.release(); translator.close()
+        captureMode = CaptureMode.NONE
+        micChunker.stop()
+        stopPlaybackServiceSilently()
+        clearChunkQueue()
+        clearTtsQueue()
+        voice.release()
+        whisper.release()
+        translator.close()
         runCatching { unregisterReceiver(playbackReceiver) }
         super.onDestroy()
     }
