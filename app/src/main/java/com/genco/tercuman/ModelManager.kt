@@ -14,11 +14,13 @@ import java.net.URL
 
 class ModelManager(private val context: Context) {
     companion object {
-        // Canlı çeviri için tiny-q8_0: küçük ve düşük gecikmeli multilingual Whisper modeli.
-        // Çok dilli Whisper modelidir; Türkçe dahil desteklenir.
-        const val WHISPER_NAME = "ggml-tiny-q8_0.bin"
-        const val WHISPER_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q8_0.bin?download=true"
+        // v0.5: ücretsiz Whisper Android AAR ile belgelenen standart tiny model.
+        // q8_0 quantized model Free AAR'da desteklenmiyor; bu nedenle v0.5'te
+        // standart multilingual tiny modele dönüyoruz. Türkçe desteklidir.
+        const val WHISPER_NAME = "ggml-tiny.bin"
+        const val WHISPER_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin?download=true"
         private const val LEGACY_BASE_NAME = "ggml-base.bin"
+        private const val LEGACY_Q8_NAME = "ggml-tiny-q8_0.bin"
 
         const val SUPER_DIR = "sherpa-onnx-supertonic-3-tts-int8-2026-05-11"
         const val SUPER_ARCHIVE = "$SUPER_DIR.tar.bz2"
@@ -29,17 +31,19 @@ class ModelManager(private val context: Context) {
     val whisperFile: File get() = File(modelRoot, WHISPER_NAME)
     val supertonicDir: File get() = File(modelRoot, SUPER_DIR)
 
-    fun whisperReady(): Boolean = whisperFile.exists() && whisperFile.length() > 35_000_000
+    fun whisperReady(): Boolean = whisperFile.exists() && whisperFile.length() > 65_000_000
     fun supertonicReady(): Boolean = listOf(
         "duration_predictor.int8.onnx", "text_encoder.int8.onnx", "vector_estimator.int8.onnx",
         "vocoder.int8.onnx", "tts.json", "unicode_indexer.bin", "voice.bin"
     ).all { File(supertonicDir, it).exists() }
 
     suspend fun ensureWhisper(onProgress: (Int) -> Unit) = withContext(Dispatchers.IO) {
+        // Eski sürümlerden kalan modelleri temizle. Özellikle q8 modeli v0.5'te
+        // ücretsiz AAR ile kullanılmadığından tekrar yüklenmesini engelliyoruz.
+        runCatching { File(modelRoot, LEGACY_BASE_NAME).delete() }
+        runCatching { File(modelRoot, LEGACY_Q8_NAME).delete() }
         if (whisperReady()) return@withContext
         download(WHISPER_URL, whisperFile, onProgress)
-        // v0.1/v0.2 base modeli artık gereksiz; depolama alanını geri ver.
-        runCatching { File(modelRoot, LEGACY_BASE_NAME).delete() }
     }
 
     suspend fun ensureSupertonic(onProgress: (Int) -> Unit) = withContext(Dispatchers.IO) {

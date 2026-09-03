@@ -55,6 +55,7 @@ class MainActivity : AppCompatActivity() {
     private var micOn = false
     private var phoneOn = false
     private var preparingModels = false
+    private var lastTranslationAt = 0L
 
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { updateStatus() }
     private val projectionLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -140,7 +141,7 @@ class MainActivity : AppCompatActivity() {
         }
         voiceRow.addView(voiceSpinner, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         speakSwitch = Switch(this).apply {
-            text = "Sesli"; setTextColor(Color.WHITE); isChecked = true
+            text = "Sesli çıktı"; setTextColor(Color.WHITE); isChecked = false
             setOnCheckedChangeListener { _, checked -> if (!checked) clearTtsQueue() }
         }
         voiceRow.addView(speakSwitch)
@@ -177,6 +178,7 @@ class MainActivity : AppCompatActivity() {
         col.addView(card("TÜRKÇE", "Çeviri burada görünecek.").also { translatedText = it.getChildAt(0) as TextView }, lp())
 
         col.addView(text("Bölünmüş ekran için tasarlandı: başka uygulamayı üstte/yan tarafta açıp TERCÜMAN'ı diğer yarıda kullanabilirsin.", 12f, Color.rgb(170,184,197)))
+        col.addView(text("Sesli çıktı v0.5'te varsayılan olarak kapalıdır; önce çevirinin stabil çalışmasını doğruluyoruz. Açarsan seçtiğin doğal ses/ton kullanılır.", 12f, Color.rgb(170,184,197)))
         col.addView(text("Telefon içi ses: Android kaynak uygulamanın yakalamaya izin vermesine bağlıdır. Sessiz akış açıkça bildirilecektir.", 12f, Color.rgb(170,184,197)))
         root.addView(col)
         return root
@@ -305,7 +307,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun enqueueTts(text: String) {
         if (text.isBlank() || captureMode == CaptureMode.NONE || !speakSwitch.isChecked) return
-        voice.stop()
         val task = SpeechTask(text.take(220), selectedVoice(), selectedTone())
         ttsQueue.tryReceive().getOrNull()
         if (ttsQueue.trySend(task).isFailure) { ttsQueue.tryReceive().getOrNull(); ttsQueue.trySend(task) }
@@ -333,16 +334,17 @@ class MainActivity : AppCompatActivity() {
         for (wav in chunkQueue) {
             try {
                 if (captureMode == CaptureMode.NONE) { wav.delete(); continue }
-                status.text = "Dinledim, çözüyorum…"
+                status.text = "🧠 Konuşma algılandı • yazıya çevriliyor…"
                 val original = withContext(Dispatchers.Default) { whisper.transcribe(wav) }
                 wav.delete()
                 if (captureMode == CaptureMode.NONE || original.length < 2) continue
                 sourceText.text = "ORİJİNAL\n\n$original"
-                status.text = "Türkçeye çevriliyor…"
+                status.text = "🔄 Türkçeye çevriliyor…"
                 val (tr, lang) = translator.toTurkish(original)
                 if (captureMode == CaptureMode.NONE) continue
                 translatedText.text = "TÜRKÇE  •  ${lang.uppercase()}\n\n$tr"
-                status.text = "Canlı çeviri aktif ✓"
+                lastTranslationAt = System.currentTimeMillis()
+                status.text = if (speakSwitch.isChecked) "🇹🇷 Çeviri hazır • 🔊 ses oluşturuluyor…" else "🇹🇷 Çeviri hazır ✓"
                 if (speakSwitch.isChecked && modelManager.supertonicReady() && captureMode != CaptureMode.NONE) enqueueTts(tr)
             } catch (e: Exception) {
                 wav.delete()

@@ -1,14 +1,14 @@
-# TERCÜMAN v0.4.0
+# TERCÜMAN v0.5.0
 
 Tamamen ücretsiz, cihaz ağırlıklı canlı çeviri Android uygulaması. API anahtarı, abonelik ve dakika başı ücret yoktur.
 
-## v0.4.0 bu sürümde
+## v0.5.0 bu sürümde
 - Kadın/erkek Supertonic ses eşleşmesi düzeltildi: F1-F5 ve M1-M5 doğru SID sırasına bağlandı.
 - Yeni **Ton** seçimi: Doğal, Enerjik, Sakin, Haberci, Vurgulu.
 - Tonlar Supertonic'in desteklediği hız ve kalite/denoising ayarlarıyla doğal ses karakterini koruyacak şekilde uygulanır.
 - AI model hazırlama ekranının hemen altında küçük ilerleme göstergesi ve yüzde bulunur: `1/2 Whisper`, `2/2 Doğal Ses`, `AI HAZIR ✓`.
 - Sabit 1.2 saniyelik pencere yerine VAD destekli kısa ses parçaları kullanılır; konuşma bittiğinde erken gönderilir, uzun konuşmada yaklaşık 1 saniyelik üst sınır vardır.
-- Whisper tiny-q8_0 ile düşük gecikme önceliklendirilir.
+- Whisper tiny ile düşük gecikme önceliklendirilir.
 - Tek parçalık latest-wins kuyruk korunur; işlem yetişemediğinde eski parça atılır.
 - TTS ayrı kuyrukta çalışır ve yeni çeviri geldiğinde eski ses kesilir.
 - Telefon içi yakalamada sessizlik durumu açıkça gösterilir.
@@ -38,3 +38,11 @@ Bu sürüm gerçek zamanlıya yaklaşmak için VAD tabanlı kısa parçalar kull
 
 ## Dağıtım
 GitHub Actions Android SDK 35 + Java 17 ile debug APK üretir.
+
+
+## v0.5.0 Stabilizasyon
+
+- Ücretsiz Whisper Android AAR ile uyumlu standart `ggml-tiny.bin` kullanılır; v0.4'teki q8 model kaldırıldı.
+- Sesli çıktı varsayılan olarak kapalıdır; çeviri zinciri önce doğrulanır.
+- Çeviri aşamaları ekranda açıkça gösterilir.
+- Supertonic doğal ses, yalnız kullanıcı sesli çıktıyı açtığında devreye girer.

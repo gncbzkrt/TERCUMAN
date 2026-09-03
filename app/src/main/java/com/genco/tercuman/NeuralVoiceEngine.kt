@@ -45,6 +45,7 @@ class NeuralVoiceEngine(private val manager: ModelManager) {
     private var tts: OfflineTts? = null
     @Volatile private var track: AudioTrack? = null
 
+    @Synchronized
     private fun initIfNeeded(): OfflineTts {
         tts?.let { return it }
         check(manager.supertonicReady()) { "Doğal ses modeli yüklü değil" }
@@ -133,9 +134,11 @@ class NeuralVoiceEngine(private val manager: ModelManager) {
         track = null
     }
 
+    @Synchronized
     fun release() {
         stop()
-        runCatching { tts?.release() }
+        val old = tts
         tts = null
+        runCatching { old?.release() }
     }
 }

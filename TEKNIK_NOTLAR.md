@@ -1,4 +1,4 @@
-# TERCÜMAN v0.4.0 Teknik Notları
+# TERCÜMAN v0.5.0 Teknik Notları
 
 - `minSdk 29`: Android 10+ AudioPlaybackCapture.
 - `targetSdk 35`.
