@@ -14,12 +14,8 @@ import java.net.URL
 
 class ModelManager(private val context: Context) {
     companion object {
-        // v0.7: İlk çalışan sürümlerde kullanılan multilingual base modeline geri dönüyoruz.
-        // Kısa 1 saniyelik pencerelerde düşük gecikme için base korunuyor.
         const val WHISPER_NAME = "ggml-base.bin"
         const val WHISPER_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin?download=true"
-        private const val LEGACY_TINY_NAME = "ggml-tiny.bin"
-        private const val LEGACY_Q8_NAME = "ggml-tiny-q8_0.bin"
 
         const val SUPER_DIR = "sherpa-onnx-supertonic-3-tts-int8-2026-05-11"
         const val SUPER_ARCHIVE = "$SUPER_DIR.tar.bz2"
@@ -30,16 +26,13 @@ class ModelManager(private val context: Context) {
     val whisperFile: File get() = File(modelRoot, WHISPER_NAME)
     val supertonicDir: File get() = File(modelRoot, SUPER_DIR)
 
-    fun whisperReady(): Boolean = whisperFile.exists() && whisperFile.length() > 130_000_000
+    fun whisperReady(): Boolean = whisperFile.exists() && whisperFile.length() > 100_000_000
     fun supertonicReady(): Boolean = listOf(
         "duration_predictor.int8.onnx", "text_encoder.int8.onnx", "vector_estimator.int8.onnx",
         "vocoder.int8.onnx", "tts.json", "unicode_indexer.bin", "voice.bin"
     ).all { File(supertonicDir, it).exists() }
 
     suspend fun ensureWhisper(onProgress: (Int) -> Unit) = withContext(Dispatchers.IO) {
-        // Yanlış/eskimiş kısa modelleri temizle; çalışan base modeli koru.
-        runCatching { File(modelRoot, LEGACY_TINY_NAME).delete() }
-        runCatching { File(modelRoot, LEGACY_Q8_NAME).delete() }
         if (whisperReady()) return@withContext
         download(WHISPER_URL, whisperFile, onProgress)
     }

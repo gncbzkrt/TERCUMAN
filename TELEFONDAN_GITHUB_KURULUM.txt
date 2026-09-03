@@ -1,20 +1,8 @@
-TERCÜMAN v0.7.0 - TELEFONDAN GITHUB İLE APK
+TERCÜMAN v0.8.0
 
-1) Bu paketin içindeki DOSYALARI mevcut TERCUMAN GitHub reposunun köküne kopyala.
-2) Termux'ta repo klasörüne gir.
-3) `git add -A`
-4) `git commit -m "TERCUMAN v0.7.0"`
-5) `git push`
-6) GitHub Actions -> `TERCUMAN APK` çalışır.
-7) Yeşil tamamlanınca Artifacts bölümünden `TERCUMAN-v0.7.0-APK` paketini indir.
-8) Paket içindeki `TERCUMAN-v0.7.0-debug.apk` dosyasını kur.
-
-İLK AÇILIŞ
-- Mikrofon iznini ver.
-- `AI MODELLERİNİ HAZIRLA`ya bas.
-- Butonun hemen altındaki küçük ilerleme göstergesinde `1/2`, `2/2` ve sonunda `AI HAZIR ✓` görünür.
-- Sonra `DIŞ SES` veya `TELEFON SESİ` seç.
-- Sesli çeviri için Ses ve Ton seç.
-
-NOT
-Bazı uygulamalar kendi sesinin yakalanmasına Android seviyesinde izin vermez. Sessiz akışta TERCÜMAN bunu açıkça bildirir.
+Termux:
+cd ~/TERCUMAN-v0.1.0-GITHUB
+unzip -o ~/storage/downloads/TERCUMAN-v0.8.0-GITHUB.zip
+git add -A
+git commit -m "TERCUMAN v0.8.0 restore stable translation core"
+git push
