@@ -1,0 +1,20 @@
+TERCÜMAN - TELEFONDAN GITHUB İLE APK
+
+1) GitHub'da yeni, boş bir repo oluştur. Örn: TERCUMAN
+2) Bu ZIP'in içindeki DOSYALARI repo köküne yükle. ZIP dosyasını tek parça olarak repo içine koyma.
+3) .github/workflows/android-build.yml yolu aynen korunmalı.
+4) Repo -> Actions -> TERCUMAN APK -> Run workflow.
+5) İşlem yeşil tamamlanınca aynı Actions çalışmasının altındaki Artifacts bölümünden:
+   TERCUMAN-v0.1.0-APK
+   dosyasını indir.
+6) ZIP artifact içindeki TERCUMAN-v0.1.0-debug.apk dosyasını telefona kur.
+
+İLK AÇILIŞ
+- Mikrofon iznini ver.
+- AI MODELLERİNİ HAZIRLA'ya bas.
+- Büyük modeller ilk seferde Wi-Fi ile indirilsin.
+- Sonra DIŞ SES ile ilk testi yap.
+- Ardından YouTube gibi bir medya uygulamasını bölünmüş ekranda açıp TELEFON SESİ testini yap.
+
+NOT:
+Bazı uygulamalar kendi sesinin yakalanmasına Android seviyesinde izin vermez. Bu uygulamalarda telefon sesi modu çalışmaz; dış ses/mikrofon modu kullanılabilir.
