@@ -81,7 +81,7 @@ class PlaybackCaptureService : Service() {
     override fun onTaskRemoved(rootIntent: Intent?) { stopSelf(); super.onTaskRemoved(rootIntent) }
 
     private fun startCapture(mp: MediaProjection) {
-        // v0.6: v0.2'de çalışan 48 kHz + 2 saniyelik playback hattını geri getiriyoruz.
+        // v0.7: 48 kHz playback hattı korunuyor; gecikmeyi azaltmak için pencere 1 saniyeye indirildi.
         val sampleRate = 48000
         val min = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         require(min > 0) { "Telefon sesi için ses formatı desteklenmiyor." }
@@ -108,7 +108,7 @@ class PlaybackCaptureService : Service() {
         check(record.recordingState == AudioRecord.RECORDSTATE_RECORDING) { "Telefon sesi kayıt durumuna geçemedi." }
 
         thread(name = "tercuman-playback") {
-            val chunkSamples = sampleRate * 2
+            val chunkSamples = sampleRate
             val buf = ShortArray(4096)
             val collected = ArrayList<Short>(chunkSamples)
             var silentSince = System.currentTimeMillis()

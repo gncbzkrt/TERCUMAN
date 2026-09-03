@@ -14,8 +14,8 @@ import java.net.URL
 
 class ModelManager(private val context: Context) {
     companion object {
-        // v0.6: İlk çalışan sürümlerde kullanılan multilingual base modeline geri dönüyoruz.
-        // 2 saniyelik ses parçalarında tiny modele göre daha güvenilir konuşma tanıma sağlar.
+        // v0.7: İlk çalışan sürümlerde kullanılan multilingual base modeline geri dönüyoruz.
+        // Kısa 1 saniyelik pencerelerde düşük gecikme için base korunuyor.
         const val WHISPER_NAME = "ggml-base.bin"
         const val WHISPER_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin?download=true"
         private const val LEGACY_TINY_NAME = "ggml-tiny.bin"

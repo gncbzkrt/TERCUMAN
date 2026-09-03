@@ -44,10 +44,9 @@ class MicrophoneChunker(private val context: Context, private val onChunk: (File
         check(record.recordingState == AudioRecord.RECORDSTATE_RECORDING) { "Mikrofon kayıt durumuna geçemedi." }
 
         thread(name = "tercuman-mic") {
-            // v0.6: v0.2'de çalışan 2 saniyelik pencereye geri dönüyoruz.
-            // Çok kısa VAD parçaları Whisper'ın konuşmayı kaçırmasına neden olabildiği için
-            // önce güvenilir transkripsiyonu geri getiriyoruz.
-            val chunkSamples = sampleRate * 2
+            // v0.7: düşük gecikme için 1 saniyelik sabit pencere.
+            // VAD yerine sabit pencere kullanarak kısa konuşmaların kaybolmasını önlüyoruz.
+            val chunkSamples = sampleRate
             val buf = ShortArray(2048)
             val collected = ArrayList<Short>(chunkSamples)
             try {
