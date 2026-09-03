@@ -8,7 +8,6 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.projection.MediaProjection
-import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.IBinder
 import java.io.File
@@ -44,40 +43,29 @@ class PlaybackCaptureService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(NotificationChannel(CHANNEL, "Telefon sesi çevirisi", NotificationManager.IMPORTANCE_LOW))
+        getSystemService(NotificationManager::class.java).createNotificationChannel(
+            NotificationChannel(CHANNEL, "Telefon sesi çevirisi", NotificationManager.IMPORTANCE_LOW)
+        )
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == STOP_ACTION) {
-            running.set(false)
-            stopSelf()
-            return START_NOT_STICKY
-        }
+        if (intent?.action == STOP_ACTION) { running.set(false); stopSelf(); return START_NOT_STICKY }
 
         val notification = Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_tercuman)
             .setContentTitle("TERCÜMAN aktif")
             .setContentText("Telefon içi medya sesi dinleniyor")
-            .setOngoing(true)
-            .build()
-        if (Build.VERSION.SDK_INT >= 29) {
-            startForeground(7, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
-        } else startForeground(7, notification)
-
+            .setOngoing(true).build()
+        if (Build.VERSION.SDK_INT >= 29) startForeground(7, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+        else startForeground(7, notification)
         if (running.getAndSet(true)) return START_NOT_STICKY
 
         val code = intent?.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED) ?: Activity.RESULT_CANCELED
         @Suppress("DEPRECATION")
-        val data = if (Build.VERSION.SDK_INT >= 33) intent?.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
-        else intent?.getParcelableExtra(EXTRA_RESULT_DATA)
-        if (code != Activity.RESULT_OK || data == null) {
-            running.set(false)
-            stopSelf()
-            return START_NOT_STICKY
-        }
+        val data = if (Build.VERSION.SDK_INT >= 33) intent?.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java) else intent?.getParcelableExtra(EXTRA_RESULT_DATA)
+        if (code != Activity.RESULT_OK || data == null) { running.set(false); stopSelf(); return START_NOT_STICKY }
 
-        val mgr = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        val mgr = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as android.media.projection.MediaProjectionManager
         projection = mgr.getMediaProjection(code, data)
         projection?.registerCallback(projectionCallback, null)
         try {
@@ -85,20 +73,14 @@ class PlaybackCaptureService : Service() {
             broadcastStatus("Telefon ses akışı bağlandı. Kaynak sesi bekleniyor…")
         } catch (e: Exception) {
             broadcastStatus("Telefon sesi yakalanamadı: ${e.message ?: "bilinmeyen hata"}")
-            running.set(false)
-            stopSelf()
+            running.set(false); stopSelf()
         }
         return START_NOT_STICKY
     }
 
-    override fun onTaskRemoved(rootIntent: Intent?) {
-        stopSelf()
-        super.onTaskRemoved(rootIntent)
-    }
+    override fun onTaskRemoved(rootIntent: Intent?) { stopSelf(); super.onTaskRemoved(rootIntent) }
 
     private fun startCapture(mp: MediaProjection) {
-        // Bazı cihazlarda 48 kHz playback capture sessiz/başarısız olabiliyor.
-        // Native output rate'e yakın yaygın formatları sırayla deniyoruz.
         val candidates = listOf(48000, 44100, 16000)
         var record: AudioRecord? = null
         var selectedRate = 0
@@ -115,24 +97,14 @@ class PlaybackCaptureService : Service() {
             val min = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
             if (min <= 0) continue
             val candidate = runCatching {
-                val format = AudioFormat.Builder()
-                    .setSampleRate(rate)
-                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
-                    .build()
-                AudioRecord.Builder()
-                    .setAudioFormat(format)
+                val format = AudioFormat.Builder().setSampleRate(rate).setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setChannelMask(AudioFormat.CHANNEL_IN_MONO).build()
+                AudioRecord.Builder().setAudioFormat(format)
                     .setBufferSizeInBytes(maxOf(min * 3, rate / 2))
-                    .setAudioPlaybackCaptureConfig(config)
-                    .build()
+                    .setAudioPlaybackCaptureConfig(config).build()
                     .takeIf { it.state == AudioRecord.STATE_INITIALIZED }
             }.getOrNull()
-            if (candidate != null) {
-                record = candidate
-                selectedRate = rate
-                selectedMin = min
-                break
-            }
+            if (candidate != null) { record = candidate; selectedRate = rate; selectedMin = min; break }
         }
 
         check(record != null) { "Bu cihazda playback capture AudioRecord oluşturulamadı." }
@@ -142,36 +114,54 @@ class PlaybackCaptureService : Service() {
         check(active.recordingState == AudioRecord.RECORDSTATE_RECORDING) { "Playback capture kayıt durumuna geçemedi." }
 
         thread(name = "tercuman-playback") {
-            // 1.2 sn pencere: çeviri başlangıcını öne çekiyoruz.
-            val chunkSamples = (selectedRate * 1.2f).toInt()
-            val buf = ShortArray(maxOf(2048, selectedMin / 2))
-            val collected = ArrayList<Short>(chunkSamples)
+            // Playback için de VAD: kısa sessizlikte hemen flush, sürekli seste ~1 sn üst sınır.
+            val frameSamples = maxOf(160, selectedRate / 50)
+            val maxSamples = selectedRate
+            val minSpeechSamples = (selectedRate * 0.35f).toInt()
+            val silenceFramesToFlush = 13
+            val buf = ShortArray(maxOf(2048, selectedMin / 4))
+            val speech = ArrayList<Short>(maxSamples)
+            var speechStarted = false
+            var silenceFrames = 0
             var silentSince = System.currentTimeMillis()
             var sentSilentWarning = false
+
+            fun flush() {
+                if (!speechStarted || speech.size < minSpeechSamples) {
+                    speech.clear(); speechStarted = false; silenceFrames = 0; return
+                }
+                val pcm = ShortArray(speech.size) { speech[it] }
+                speech.clear(); speechStarted = false; silenceFrames = 0
+                if (rms(pcm) < 220.0) return
+                val f = File(cacheDir, "phone_${System.currentTimeMillis()}.wav")
+                WavUtils.writePcm16Mono(f, pcm, selectedRate)
+                sendBroadcast(Intent(ACTION_CHUNK).setPackage(packageName).putExtra(EXTRA_PATH, f.absolutePath))
+            }
+
             try {
                 while (running.get()) {
                     val n = active.read(buf, 0, buf.size)
                     if (n <= 0) continue
-                    for (i in 0 until n) collected.add(buf[i])
-                    if (collected.size >= chunkSamples) {
-                        val pcm = ShortArray(chunkSamples) { collected[it] }
-                        collected.clear()
-                        val energy = rms(pcm)
-                        if (energy < 250.0) {
-                            if (System.currentTimeMillis() - silentSince > 2500 && !sentSilentWarning) {
-                                broadcastStatus("Ses akışı sessiz. YouTube/Instagram kaydı uygulama politikası veya cihazdaki Android playback-capture sorunu nedeniyle engelleniyor olabilir.")
-                                sentSilentWarning = true
-                            }
-                            continue
+                    var offset = 0
+                    while (offset < n) {
+                        val take = minOf(frameSamples, n - offset)
+                        val frame = ShortArray(take)
+                        System.arraycopy(buf, offset, frame, 0, take)
+                        offset += take
+                        val energy = rms(frame)
+                        val speechFrame = energy >= 210.0
+                        if (speechFrame) { speechStarted = true; silenceFrames = 0; silentSince = System.currentTimeMillis(); sentSilentWarning = false }
+                        else if (speechStarted) silenceFrames++
+                        else if (System.currentTimeMillis() - silentSince > 2500 && !sentSilentWarning) {
+                            broadcastStatus("Ses akışı sessiz. YouTube/Instagram kaydı Android veya kaynak uygulama tarafından engelleniyor olabilir.")
+                            sentSilentWarning = true
                         }
-                        silentSince = System.currentTimeMillis()
-                        sentSilentWarning = false
-                        val f = File(cacheDir, "phone_${System.currentTimeMillis()}.wav")
-                        WavUtils.writePcm16Mono(f, pcm, selectedRate)
-                        sendBroadcast(Intent(ACTION_CHUNK).setPackage(packageName).putExtra(EXTRA_PATH, f.absolutePath))
+                        if (speechStarted) for (s in frame) speech.add(s)
+                        if (speechStarted && (speech.size >= maxSamples || silenceFrames >= silenceFramesToFlush)) flush()
                     }
                 }
             } finally {
+                flush()
                 runCatching { active.stop() }
                 active.release()
             }
@@ -180,10 +170,7 @@ class PlaybackCaptureService : Service() {
 
     private fun rms(data: ShortArray): Double {
         var sum = 0.0
-        for (s in data) {
-            val v = s.toDouble()
-            sum += v * v
-        }
+        for (s in data) { val v = s.toDouble(); sum += v * v }
         return sqrt(sum / data.size.coerceAtLeast(1))
     }
 
@@ -196,8 +183,7 @@ class PlaybackCaptureService : Service() {
         runCatching { recorder?.stop() }
         recorder = null
         projection?.let { mp -> runCatching { mp.unregisterCallback(projectionCallback) } }
-        projection?.stop()
-        projection = null
+        projection?.stop(); projection = null
         super.onDestroy()
     }
 }

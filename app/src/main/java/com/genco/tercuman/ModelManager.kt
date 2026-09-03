@@ -14,7 +14,7 @@ import java.net.URL
 
 class ModelManager(private val context: Context) {
     companion object {
-        // Canlı çeviri için tiny-q8_0: yaklaşık 42 MB ve base'e göre belirgin şekilde daha hızlı.
+        // Canlı çeviri için tiny-q8_0: küçük ve düşük gecikmeli multilingual Whisper modeli.
         // Çok dilli Whisper modelidir; Türkçe dahil desteklenir.
         const val WHISPER_NAME = "ggml-tiny-q8_0.bin"
         const val WHISPER_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q8_0.bin?download=true"

@@ -38,33 +38,58 @@ class MicrophoneChunker(private val context: Context, private val onChunk: (File
         check(record.state == AudioRecord.STATE_INITIALIZED) { "Mikrofon başlatılamadı." }
         recorder = record
         if (AcousticEchoCanceler.isAvailable()) {
-            echoCanceler = runCatching {
-                AcousticEchoCanceler.create(record.audioSessionId)?.apply { enabled = true }
-            }.getOrNull()
+            echoCanceler = runCatching { AcousticEchoCanceler.create(record.audioSessionId)?.apply { enabled = true } }.getOrNull()
         }
         record.startRecording()
 
         thread(name = "tercuman-mic") {
-            // 1.2 sn pencere: 2 sn'ye göre daha erken sonuç verir.
-            val chunkSamples = (sampleRate * 1.2f).toInt()
-            val buf = ShortArray(2048)
-            val collected = ArrayList<Short>(chunkSamples)
+            // VAD tabanlı kısa parçalar: konuşma bittiğinde hemen, uzun konuşmada
+            // en fazla ~1 sn'de bir parça gönderilir. Sabit 1.2 sn bekleme yok.
+            val frameSamples = sampleRate / 50 // 20 ms
+            val maxSamples = (sampleRate * 1.0f).toInt()
+            val minSpeechSamples = (sampleRate * 0.35f).toInt()
+            val silenceFramesToFlush = 13 // ~260 ms
+            val buf = ShortArray(frameSamples)
+            val speech = ArrayList<Short>(maxSamples)
+            var speechStarted = false
+            var silenceFrames = 0
+            var lastEnergy = 0.0
+
+            fun flush() {
+                if (!speechStarted || speech.size < minSpeechSamples) {
+                    speech.clear(); speechStarted = false; silenceFrames = 0; return
+                }
+                val data = ShortArray(speech.size) { speech[it] }
+                speech.clear(); speechStarted = false; silenceFrames = 0
+                if (rms(data) < 350.0) return
+                val file = File(context.cacheDir, "mic_${System.currentTimeMillis()}.wav")
+                WavUtils.writePcm16Mono(file, data, sampleRate)
+                onChunk(file)
+            }
+
             try {
                 while (running.get()) {
                     val n = record.read(buf, 0, buf.size)
                     if (n <= 0) continue
-                    for (i in 0 until n) collected.add(buf[i])
-                    if (collected.size >= chunkSamples) {
-                        val data = ShortArray(chunkSamples) { collected[it] }
-                        collected.clear()
-                        // Sessiz pencereleri Whisper'a göndermiyoruz.
-                        if (rms(data) < 450.0) continue
-                        val file = File(context.cacheDir, "mic_${System.currentTimeMillis()}.wav")
-                        WavUtils.writePcm16Mono(file, data, sampleRate)
-                        onChunk(file)
+                    val frame = if (n == buf.size) buf else buf.copyOf(n)
+                    lastEnergy = rms(frame)
+                    val speechFrame = lastEnergy >= 420.0
+
+                    if (speechFrame) {
+                        speechStarted = true
+                        silenceFrames = 0
+                    } else if (speechStarted) {
+                        silenceFrames++
                     }
+
+                    if (speechStarted) {
+                        for (s in frame) speech.add(s)
+                    }
+
+                    if (speechStarted && (speech.size >= maxSamples || silenceFrames >= silenceFramesToFlush)) flush()
                 }
             } finally {
+                flush()
                 runCatching { record.stop() }
                 record.release()
             }
@@ -73,10 +98,7 @@ class MicrophoneChunker(private val context: Context, private val onChunk: (File
 
     private fun rms(data: ShortArray): Double {
         var sum = 0.0
-        for (s in data) {
-            val v = s.toDouble()
-            sum += v * v
-        }
+        for (s in data) { val v = s.toDouble(); sum += v * v }
         return sqrt(sum / data.size.coerceAtLeast(1))
     }
 

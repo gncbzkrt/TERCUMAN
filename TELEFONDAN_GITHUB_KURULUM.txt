@@ -1,23 +1,20 @@
-TERCÜMAN - TELEFONDAN GITHUB İLE APK
+TERCÜMAN v0.4.0 - TELEFONDAN GITHUB İLE APK
 
-1) GitHub'da yeni, boş bir repo oluştur. Örn: TERCUMAN
-2) Bu ZIP'in içindeki DOSYALARI repo köküne yükle. ZIP dosyasını tek parça olarak repo içine koyma.
-3) .github/workflows/android-build.yml yolu aynen korunmalı.
-4) Repo -> Actions -> TERCUMAN APK -> Run workflow.
-5) İşlem yeşil tamamlanınca aynı Actions çalışmasının altındaki Artifacts bölümünden:
-   TERCUMAN-v0.3.0-APK
-   dosyasını indir.
-6) ZIP artifact içindeki TERCUMAN-v0.3.0-debug.apk dosyasını telefona kur.
+1) Bu paketin içindeki DOSYALARI mevcut TERCUMAN GitHub reposunun köküne kopyala.
+2) Termux'ta repo klasörüne gir.
+3) `git add -A`
+4) `git commit -m "TERCUMAN v0.4.0"`
+5) `git push`
+6) GitHub Actions -> `TERCUMAN APK` çalışır.
+7) Yeşil tamamlanınca Artifacts bölümünden `TERCUMAN-v0.4.0-APK` paketini indir.
+8) Paket içindeki `TERCUMAN-v0.4.0-debug.apk` dosyasını kur.
 
 İLK AÇILIŞ
 - Mikrofon iznini ver.
-- AI MODELLERİNİ HAZIRLA'ya bas.
-- Büyük modeller ilk seferde Wi-Fi ile indirilsin.
-- Sonra DIŞ SES ile ilk testi yap.
-- Ardından YouTube gibi bir medya uygulamasını bölünmüş ekranda açıp TELEFON SESİ testini yap.
+- `AI MODELLERİNİ HAZIRLA`ya bas.
+- Butonun hemen altındaki küçük ilerleme göstergesinde `1/2`, `2/2` ve sonunda `AI HAZIR ✓` görünür.
+- Sonra `DIŞ SES` veya `TELEFON SESİ` seç.
+- Sesli çeviri için Ses ve Ton seç.
 
-NOT:
-Bazı uygulamalar kendi sesinin yakalanmasına Android seviyesinde izin vermez. Bu uygulamalarda telefon sesi modu çalışmaz; dış ses/mikrofon modu kullanılabilir.
-
-
-Güncelleme (v0.3.0): Mevcut TERCUMAN deposundaki dosyaları bu paketle değiştir, ardından git add -A && git commit -m "TERCUMAN v0.3.0" && git push.
+NOT
+Bazı uygulamalar kendi sesinin yakalanmasına Android seviyesinde izin vermez. Sessiz akışta TERCÜMAN bunu açıkça bildirir.

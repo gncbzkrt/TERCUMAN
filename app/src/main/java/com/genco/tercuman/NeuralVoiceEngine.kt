@@ -14,16 +14,32 @@ import kotlin.math.roundToInt
 
 class NeuralVoiceEngine(private val manager: ModelManager) {
     data class VoiceProfile(val label: String, val sid: Int, val speed: Float)
+    data class ToneProfile(
+        val label: String,
+        val speedMultiplier: Float,
+        val steps: Int
+    )
 
-    // Supertonic 3 voice.bin sıralaması M1..M5 ardından F1..F5'tir.
-    // Bu nedenle sid 0..4 erkek, sid 5..9 kadın sesleridir.
-    // UI'da kadınları önce gösteriyoruz ama gerçek SID'ler model sırasına göre veriliyor.
+    // Supertonic 3 dokümantasyonundaki ses isimleri M1..M5 ve F1..F5'tir.
+    // Sherpa-onnx voice.bin paketindeki sıra F1..F5 ardından M1..M5 olarak kullanılır.
+    // Önceki sürümde bu sıra ters kabul edildiği için kadın/erkek sesler çapraz çıkıyordu.
     val profiles = listOf(
-        VoiceProfile("Kadın 1 (F1)", 5, 1.02f), VoiceProfile("Kadın 2 (F2)", 6, 1.00f),
-        VoiceProfile("Kadın 3 (F3)", 7, 0.98f), VoiceProfile("Kadın 4 (F4)", 8, 1.04f),
-        VoiceProfile("Kadın 5 (F5)", 9, 0.96f), VoiceProfile("Erkek 1 (M1)", 0, 1.00f),
-        VoiceProfile("Erkek 2 (M2)", 1, 0.98f), VoiceProfile("Erkek 3 (M3)", 2, 1.03f),
-        VoiceProfile("Erkek 4 (M4)", 3, 0.96f), VoiceProfile("Erkek 5 (M5)", 4, 1.01f)
+        VoiceProfile("Kadın 1 (F1)", 0, 1.02f), VoiceProfile("Kadın 2 (F2)", 1, 1.00f),
+        VoiceProfile("Kadın 3 (F3)", 2, 0.98f), VoiceProfile("Kadın 4 (F4)", 3, 1.04f),
+        VoiceProfile("Kadın 5 (F5)", 4, 0.96f), VoiceProfile("Erkek 1 (M1)", 5, 1.00f),
+        VoiceProfile("Erkek 2 (M2)", 6, 0.98f), VoiceProfile("Erkek 3 (M3)", 7, 1.03f),
+        VoiceProfile("Erkek 4 (M4)", 8, 0.96f), VoiceProfile("Erkek 5 (M5)", 9, 1.01f)
+    )
+
+    // Supertonic 3'te ayrı bir "emotion" parametresi yok; bu nedenle tonlar
+    // modelin doğal sesini bozmadan hız/denoising adımıyla ritim karakteri verir.
+    // Gerçek pitch/emotion kontrolü ileride farklı bir TTS modeliyle eklenebilir.
+    val tones = listOf(
+        ToneProfile("Doğal", 1.00f, 6),
+        ToneProfile("Enerjik", 1.13f, 5),
+        ToneProfile("Sakin", 0.91f, 6),
+        ToneProfile("Haberci", 1.08f, 6),
+        ToneProfile("Vurgulu", 0.97f, 7)
     )
 
     private var tts: OfflineTts? = null
@@ -51,17 +67,20 @@ class NeuralVoiceEngine(private val manager: ModelManager) {
         return OfflineTts(config = config).also { tts = it }
     }
 
-    suspend fun speakTurkish(text: String, profile: VoiceProfile) = withContext(Dispatchers.Default) {
+    suspend fun speakTurkish(
+        text: String,
+        profile: VoiceProfile,
+        tone: ToneProfile = tones.first()
+    ) = withContext(Dispatchers.Default) {
         if (text.isBlank()) return@withContext
         val engine = initIfNeeded()
         val safeSid = if (engine.numSpeakers() > 0) profile.sid.coerceIn(0, engine.numSpeakers() - 1) else 0
-
-        // Canlı mod: TTS üretimi tamamlanmadan ilk ses paketini AudioTrack'e yaz.
-        // Böylece tüm cümlenin bitmesini beklemeden konuşma başlayabilir.
+        val safeSpeed = (profile.speed * tone.speedMultiplier).coerceIn(0.90f, 1.50f)
         val sampleRate = engine.sampleRate()
         val min = AudioTrack.getMinBufferSize(
             sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT
         ).coerceAtLeast(8192)
+
         stop()
         val localTrack = AudioTrack.Builder()
             .setAudioAttributes(
@@ -83,12 +102,11 @@ class NeuralVoiceEngine(private val manager: ModelManager) {
 
         try {
             engine.generateWithConfigAndCallback(
-                text = text.take(260),
+                text = text.take(220),
                 config = GenerationConfig(
                     sid = safeSid,
-                    speed = profile.speed,
-                    // 4 adım canlı kullanım için hız öncelikli ayardır.
-                    numSteps = 4,
+                    speed = safeSpeed,
+                    numSteps = tone.steps.coerceIn(5, 8),
                     extra = mapOf("lang" to "tr")
                 )
             ) { samples ->
@@ -101,41 +119,12 @@ class NeuralVoiceEngine(private val manager: ModelManager) {
                 if (written < 0) 0 else 1
             }
         } finally {
-            // Track nesnesini yalnızca hâlâ bizim ürettiğimiz ses ise kapat.
             if (track === localTrack) {
                 runCatching { localTrack.stop() }
                 runCatching { localTrack.release() }
                 track = null
             }
         }
-    }
-
-    private fun playFloatPcm(samples: FloatArray, sampleRate: Int) {
-        stop()
-        val pcm = ShortArray(samples.size) { i ->
-            (samples[i].coerceIn(-1f, 1f) * Short.MAX_VALUE).roundToInt().toShort()
-        }
-        val min = AudioTrack.getMinBufferSize(
-            sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT
-        ).coerceAtLeast(4096)
-        track = AudioTrack.Builder()
-            .setAudioAttributes(
-                AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    // Telefon içi ses yakalama modunda TERCÜMAN'ın kendi TTS çıktısını dışarı vermiyoruz.
-                    .setAllowedCapturePolicy(AudioAttributes.ALLOW_CAPTURE_BY_NONE)
-                    .build()
-            )
-            .setAudioFormat(
-                AudioFormat.Builder().setSampleRate(sampleRate)
-                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build()
-            )
-            .setBufferSizeInBytes(maxOf(min, pcm.size * 2))
-            .setTransferMode(AudioTrack.MODE_STATIC)
-            .build()
-        track?.write(pcm, 0, pcm.size)
-        track?.play()
     }
 
     fun stop() {
