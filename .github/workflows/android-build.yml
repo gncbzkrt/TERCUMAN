@@ -8,6 +8,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Kodu al
         uses: actions/checkout@v4
@@ -29,16 +30,26 @@ jobs:
         with:
           gradle-version: '8.9'
 
+      - name: İmzalama anahtarını hazırla
+        env:
+          KEYSTORE_B64: ${{ secrets.TERCUMAN_KEYSTORE_B64 }}
+        run: |
+          echo "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/tercuman-release.jks"
+          chmod 600 "$RUNNER_TEMP/tercuman-release.jks"
+
       - name: APK oluştur
+        env:
+          TERCUMAN_KEYSTORE_PATH: ${{ runner.temp }}/tercuman-release.jks
+          TERCUMAN_KEYSTORE_PASSWORD: ${{ secrets.TERCUMAN_KEYSTORE_PASSWORD }}
         run: gradle :app:assembleDebug --stacktrace
 
       - name: APK'yı hazırla
         run: |
           mkdir -p out
-          cp app/build/outputs/apk/debug/app-debug.apk out/TERCUMAN-v0.1.0-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk out/TERCUMAN-v1.1.0-debug.apk
 
       - name: APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: TERCUMAN-v0.1.0-APK
-          path: out/TERCUMAN-v0.1.0-debug.apk
+          name: TERCUMAN-v1.1.0-APK
+          path: out/TERCUMAN-v1.1.0-debug.apk

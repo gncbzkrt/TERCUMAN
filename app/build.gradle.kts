@@ -3,6 +3,10 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val stableKeystorePath = System.getenv("TERCUMAN_KEYSTORE_PATH")
+val stableKeystorePassword = System.getenv("TERCUMAN_KEYSTORE_PASSWORD")
+val hasStableSigning = !stableKeystorePath.isNullOrBlank() && !stableKeystorePassword.isNullOrBlank()
+
 android {
     namespace = "com.genco.tercuman"
     compileSdk = 35
@@ -19,7 +23,24 @@ android {
         }
     }
 
+    signingConfigs {
+        if (hasStableSigning) {
+            create("stableDebug") {
+                storeFile = file(stableKeystorePath!!)
+                storePassword = stableKeystorePassword
+                keyAlias = "tercuman"
+                keyPassword = stableKeystorePassword
+            }
+        }
+    }
+
     buildTypes {
+        getByName("debug") {
+            if (hasStableSigning) {
+                signingConfig = signingConfigs.getByName("stableDebug")
+            }
+        }
+
         release {
             isMinifyEnabled = false
             proguardFiles(
