@@ -20,7 +20,6 @@ import androidx.lifecycle.lifecycleScope
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -46,9 +45,7 @@ class MainActivity : AppCompatActivity() {
     private var phoneOn = false
     private var ready = false
     private var lastEnglish = ""
-    private var lastTranslated = ""
-    private var translationJob: Job? = null
-    private var lastTranslationAt = 0L
+    private val translatedHistory = ArrayDeque<String>()
 
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { updateStatus() }
     private val projectionLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -92,7 +89,7 @@ class MainActivity : AppCompatActivity() {
         val root = ScrollView(this).apply { setBackgroundColor(Color.rgb(12, 27, 51)); isFillViewport = true }
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(14), dp(16), dp(20)) }
         col.addView(text("TERCÜMAN", 28f).apply { setTypeface(typeface, android.graphics.Typeface.BOLD) })
-        col.addView(text("v1.0.1 • gerçek streaming ASR • cihaz içi", 13f, Color.rgb(170,184,197)))
+        col.addView(text("v1.0.3 • gerçek streaming ASR • cihaz içi", 13f, Color.rgb(170,184,197)))
         status = text("Hazırlanıyor…", 14f, Color.rgb(85,214,190)); col.addView(status)
 
         modelButton = MaterialButton(this).apply { text = "STREAMING AI'YI HAZIRLA"; setOnClickListener { downloadModels() } }
@@ -113,9 +110,9 @@ class MainActivity : AppCompatActivity() {
         }
         col.addView(preview, lp())
 
-        col.addView(card("ORİJİNAL • İNGİLİZCE", "Canlı konuşma burada görünecek." ).also { sourceText = it.getChildAt(0) as TextView }, lp())
-        col.addView(card("TÜRKÇE", "Canlı çeviri burada görünecek." ).also { translatedText = it.getChildAt(0) as TextView }, lp())
-        col.addView(text("v1.0.1 ilk deney: İngilizce → Türkçe. Ses, tek bir OnlineStream'e 100 ms parçalar halinde beslenir; parçalar ayrı ayrı Whisper'a gönderilmez.", 12f, Color.rgb(170,184,197)))
+        col.addView(card("ORİJİNAL • İNGİLİZCE • CANLI", "Konuşma burada anlık görünecek." ).also { sourceText = it.getChildAt(0) as TextView }, lp())
+        col.addView(card("TÜRKÇE • STABİL ÇEVİRİ", "Cümle tamamlandığında temiz çeviri burada kalır." ).also { translatedText = it.getChildAt(0) as TextView }, lp())
+        col.addView(text("v1.0.3: Gerçek streaming devam eder. İngilizce metin anlık akar; Türkçe yalnızca cümle/ifade tamamlandığında güncellenir. Böylece yarım çeviriler ekrana ve sese düşmez.", 12f, Color.rgb(170,184,197)))
         col.addView(text("Telefon sesi Android AudioPlaybackCapture izinleriyle alınır; kaynak uygulama yakalamayı engellerse ses gelmeyebilir.", 12f, Color.rgb(170,184,197)))
         root.addView(col)
         return root
@@ -199,36 +196,53 @@ class MainActivity : AppCompatActivity() {
     private suspend fun handleAudio(pcm: ShortArray, sampleRate: Int) {
         try {
             val result = streaming.acceptPcm16(pcm, sampleRate)
-            val partial = result.first
+            val partial = result.first.trim()
             val endpoint = result.second
-            if (partial.isBlank() || partial == lastEnglish) return
-            lastEnglish = partial
-            withContext(Dispatchers.Main) {
-                sourceText.text = "ORİJİNAL • İNGİLİZCE\n\n$partial"
-                status.text = if (endpoint) "🧠 Cümle tamamlandı • Türkçeye çevriliyor…" else "🟢 Canlı konuşma algılanıyor…"
+            if (partial.isBlank()) return
+
+            // Streaming ASR'nin anlık çıktısını kaybetmeden göster.
+            // Aynı metni tekrar tekrar UI'ye yazmayı önle.
+            if (partial != lastEnglish) {
+                lastEnglish = partial
+                withContext(Dispatchers.Main) {
+                    sourceText.text = "ORİJİNAL • İNGİLİZCE • CANLI\n\n$partial"
+                    status.text = if (endpoint) {
+                        "🧠 Cümle tamamlandı • Türkçe hazırlanıyor…"
+                    } else {
+                        "🟢 Canlı konuşma algılanıyor…"
+                    }
+                }
             }
-            scheduleTranslation(partial, endpoint)
+
+            // Kritik stabilizasyon: yarım ASR metnini çevirmiyoruz.
+            // Yalnızca endpoint geldiğinde tam ifadeyi ML Kit'e gönderiyoruz.
+            if (endpoint) translateFinalSentence(partial)
         } catch (e: Exception) {
-            withContext(Dispatchers.Main) { status.text = "Streaming ASR hatası: ${e.message ?: e.javaClass.simpleName}" }
+            withContext(Dispatchers.Main) {
+                status.text = "Streaming ASR hatası: ${e.message ?: e.javaClass.simpleName}"
+            }
         }
     }
 
-    private fun scheduleTranslation(text: String, endpoint: Boolean) {
-        val now = System.currentTimeMillis()
-        if (!endpoint && now - lastTranslationAt < 650L) return
-        lastTranslationAt = now
-        translationJob?.cancel()
-        translationJob = lifecycleScope.launch {
-            delay(if (endpoint) 50L else 120L)
+    private fun translateFinalSentence(text: String) {
+        lifecycleScope.launch {
             try {
-                val tr = withContext(Dispatchers.IO) { translator.translateEnglishToTurkish(text) }
-                if (tr.isBlank() || tr == lastTranslated) return@launch
-                lastTranslated = tr
-                translatedText.text = "TÜRKÇE\n\n$tr"
-                status.text = if (endpoint) "🇹🇷 Çeviri hazır ✓" else "🇹🇷 Canlı çeviri…"
-                if (speakSwitch.isChecked && ttsReady) previewTts?.speak(tr, TextToSpeech.QUEUE_FLUSH, null, "live_${System.currentTimeMillis()}")
+                val tr = withContext(Dispatchers.IO) { translator.translateEnglishToTurkish(text) }.trim()
+                if (tr.isBlank()) return@launch
+
+                translatedHistory.addLast(tr)
+                while (translatedHistory.size > 3) translatedHistory.removeFirst()
+                val historyText = translatedHistory.joinToString("\n\n")
+
+                translatedText.text = "TÜRKÇE • STABİL\n\n$historyText"
+                status.text = "🇹🇷 Çeviri hazır ✓ • Yeni cümle bekleniyor"
+
+                // Ses yalnızca tamamlanmış cümleyi okur; yarım partial'lar seslendirilmez.
+                if (speakSwitch.isChecked && ttsReady) {
+                    previewTts?.speak(tr, TextToSpeech.QUEUE_ADD, null, "final_${System.currentTimeMillis()}")
+                }
             } catch (e: Exception) {
-                translatedText.text = "TÜRKÇE\n\n⚠️ Çeviri: ${e.message ?: e.javaClass.simpleName}"
+                translatedText.text = "TÜRKÇE • STABİL\n\n⚠️ Çeviri: ${e.message ?: e.javaClass.simpleName}"
                 status.text = "Çeviri hatası"
             }
         }

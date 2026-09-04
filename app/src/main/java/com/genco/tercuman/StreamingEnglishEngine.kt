@@ -12,9 +12,10 @@ import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig
 import java.io.File
 
 /**
- * v1.0 deneysel gerçek streaming ASR.
- * İlk deney İngilizce kaynak dil içindir. Ses parçaları ayrı ayrı Whisper'a
- * gönderilmez; tek bir OnlineStream'e art arda beslenir.
+ * v1.0.3 gerçek streaming ASR.
+ * İlk streaming hattı İngilizce kaynak dil içindir. Ses parçaları ayrı ayrı Whisper'a
+ * gönderilmez; tek bir OnlineStream'e art arda beslenir. Endpoint geldiğinde ifade
+ * tamamlanmış kabul edilir ve yeni bir OnlineStream açılır.
  */
 class StreamingEnglishEngine(private val context: Context, private val modelDir: File) {
     private var recognizer: OnlineRecognizer? = null
