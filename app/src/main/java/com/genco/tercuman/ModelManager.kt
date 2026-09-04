@@ -24,18 +24,31 @@ class ModelManager(private val context: Context) {
         const val SUPER_DIR = "sherpa-onnx-supertonic-3-tts-int8-2026-05-11"
         const val SUPER_ARCHIVE = "$SUPER_DIR.tar.bz2"
         const val SUPER_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/$SUPER_ARCHIVE"
+        const val DIARIZATION_DIR = "sherpa-onnx-pyannote-segmentation-3-0"
+        const val DIARIZATION_ARCHIVE = "$DIARIZATION_DIR.tar.bz2"
+        const val DIARIZATION_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/$DIARIZATION_ARCHIVE"
+        const val SPEAKER_EMBEDDING_NAME = "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
+        const val SPEAKER_EMBEDDING_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/$SPEAKER_EMBEDDING_NAME"
     }
 
     val modelRoot: File get() = File(context.filesDir, "models").apply { mkdirs() }
     val whisperFile: File get() = File(modelRoot, WHISPER_NAME)
     val streamingDir: File get() = File(modelRoot, STREAM_DIR)
     val supertonicDir: File get() = File(modelRoot, SUPER_DIR)
+    val diarizationDir: File get() = File(modelRoot, DIARIZATION_DIR)
+    val speakerEmbeddingFile: File get() = File(modelRoot, SPEAKER_EMBEDDING_NAME)
 
     fun whisperReady(): Boolean = whisperFile.exists() && whisperFile.length() > 100_000_000
     fun streamingReady(): Boolean = listOf(
         "encoder-epoch-99-avg-1.int8.onnx", "decoder-epoch-99-avg-1.onnx",
         "joiner-epoch-99-avg-1.int8.onnx", "tokens.txt"
     ).all { File(streamingDir, it).exists() && File(streamingDir, it).length() > 0 }
+    fun diarizationReady(): Boolean =
+        File(diarizationDir, "model.onnx").exists() &&
+        File(diarizationDir, "model.onnx").length() > 0 &&
+        speakerEmbeddingFile.exists() &&
+        speakerEmbeddingFile.length() > 1000000
+
     fun supertonicReady(): Boolean = listOf(
         "duration_predictor.int8.onnx", "text_encoder.int8.onnx", "vector_estimator.int8.onnx",
         "vocoder.int8.onnx", "tts.json", "unicode_indexer.bin", "voice.bin"
@@ -53,6 +66,16 @@ class ModelManager(private val context: Context) {
     suspend fun ensureWhisper(onProgress: (Int) -> Unit) = withContext(Dispatchers.IO) {
         if (whisperReady()) return@withContext
         download(WHISPER_URL, whisperFile, onProgress)
+    }
+
+    suspend fun ensureDiarization(onProgress: (Int) -> Unit) = withContext(Dispatchers.IO) {
+        if (diarizationReady()) return@withContext
+        val archive = File(modelRoot, DIARIZATION_ARCHIVE)
+        download(DIARIZATION_URL, archive, onProgress)
+        extractTarBz2(archive, modelRoot)
+        archive.delete()
+        download(SPEAKER_EMBEDDING_URL, speakerEmbeddingFile, onProgress)
+        check(diarizationReady()) { "Konuşmacı modelleri açılamadı." }
     }
 
     suspend fun ensureSupertonic(onProgress: (Int) -> Unit) = withContext(Dispatchers.IO) {

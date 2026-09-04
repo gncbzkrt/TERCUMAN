@@ -31,6 +31,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var streaming: StreamingEnglishEngine
     private lateinit var translator: TranslationEngine
     private lateinit var micChunker: MicrophoneChunker
+    private lateinit var diarization: SpeakerDiarizationEngine
     private var previewTts: TextToSpeech? = null
     private var ttsReady = false
 
@@ -52,6 +53,9 @@ class MainActivity : AppCompatActivity() {
     private val audioMutex = kotlinx.coroutines.sync.Mutex()
     private var liveTranslationJob: kotlinx.coroutines.Job? = null
     private var translationTextSize = 20f
+    private var lastCommittedEnglish = ""
+    private val originalHistory = mutableListOf<String>()
+    private val translationHistory = mutableListOf<String>()
 
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { updateStatus() }
     private val projectionLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -62,6 +66,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         modelManager = ModelManager(this)
+        diarization = SpeakerDiarizationEngine(this, modelManager.modelRoot)
         translator = TranslationEngine()
         streaming = StreamingEnglishEngine(this, modelManager.streamingDir)
         micChunker = MicrophoneChunker(this) { pcm, rate -> StreamingHub.emit(pcm, rate) }
@@ -251,6 +256,11 @@ class MainActivity : AppCompatActivity() {
             modelButton.isEnabled = false
             try {
                 status.text = "Gerçek streaming İngilizce modeli indiriliyor…"
+            status.text = "Konuşmacı modeli hazırlanıyor…"
+            modelManager.ensureDiarization { p ->
+                runOnUiThread { status.text = "Konuşmacı modeli indiriliyor… $p%" }
+            }
+            diarization.start()
                 modelManager.ensureStreamingEnglish { p -> runOnUiThread { status.text = "Streaming ASR modeli: %$p" } }
                 status.text = "Streaming ASR hazır ✓ • İngilizce → Türkçe modeli hazırlanıyor…"
                 translator.prepareEnglishTurkish { msg -> runOnUiThread { status.text = msg } }
@@ -303,61 +313,96 @@ class MainActivity : AppCompatActivity() {
 
     private suspend fun handleAudio(pcm: ShortArray, sampleRate: Int) {
         try {
+            diarization.addPcm16(pcm, sampleRate)
+
             val result = streaming.acceptPcm16(pcm, sampleRate)
             val partial = result.first.trim()
             val endpoint = result.second
+
             if (partial.isBlank()) return
 
-            if (partial != lastEnglish) {
-                lastEnglish = partial
-                val id = ++sentenceSequence
-                latestSentenceId = id
+            if (!endpoint) {
                 withContext(Dispatchers.Main) {
-                    sourceText.text = "ORİJİNAL • CANLI\n\n$partial"
-                    status.text = if (endpoint) "🧠 Cümle tamamlandı • Türkçe güncelleniyor…" else "🟢 Canlı konuşma algılanıyor…"
+                    status.text = "🟢 Konuşma algılanıyor…"
                 }
-                scheduleLiveTranslation(partial, id, endpoint)
+                return
             }
+
+            val stableEnglish = partial
+                .replace(Regex("\\s+"), " ")
+                .trim()
+
+            if (stableEnglish.isBlank() || stableEnglish == lastCommittedEnglish) {
+                return
+            }
+
+            lastCommittedEnglish = stableEnglish
+
+            val speaker = diarization.currentSpeaker()
+            val sentenceId = ++sentenceSequence
+            latestSentenceId = sentenceId
+
+            withContext(Dispatchers.Main) {
+                status.text = "🧠 $speaker konuştu • Türkçe çevriliyor…"
+            }
+
+            scheduleFinalTranslation(
+                text = stableEnglish,
+                speaker = speaker,
+                sentenceId = sentenceId
+            )
+
         } catch (e: Exception) {
-            withContext(Dispatchers.Main) { status.text = "Streaming ASR hatası: ${e.message ?: e.javaClass.simpleName}" }
+            withContext(Dispatchers.Main) {
+                status.text = "Streaming ASR hatası: ${e.message ?: e.javaClass.simpleName}"
+            }
         }
     }
 
-    /**
-     * Translation is deliberately non-blocking: partial ASR is translated quickly,
-     * then the completed utterance is translated once more for a cleaner result.
-     */
-    private fun scheduleLiveTranslation(text: String, sentenceId: Long, endpoint: Boolean) {
+    private fun scheduleFinalTranslation(
+        text: String,
+        speaker: String,
+        sentenceId: Long
+    ) {
         liveTranslationJob?.cancel()
+
         liveTranslationJob = lifecycleScope.launch {
-            delay(if (endpoint) 40L else 180L)
             try {
-                val turns = ConversationEngine.format(text)
-                if (turns.isEmpty()) return@launch
-                val translated = mutableListOf<String>()
-                for (turn in turns) {
-                    val tr = withContext(Dispatchers.IO) { translator.translateEnglishToTurkish(turn.text) }.trim()
-                    if (tr.isNotBlank()) translated += "👤 ${turn.speaker}\n$tr"
-                }
-                if (translated.isEmpty() || sentenceId != latestSentenceId) return@launch
-                val full = translated.joinToString("\n\n")
+                val translated = withContext(Dispatchers.IO) {
+                    translator.translateEnglishToTurkish(text)
+                }.trim()
+
+                if (translated.isBlank() || sentenceId != latestSentenceId) return@launch
+
                 withContext(Dispatchers.Main) {
-                    if (sentenceId == latestSentenceId) {
-                        translatedText.text = "TÜRKÇE • ${if (endpoint) "STABİL" else "CANLI"}\n\n$full"
-                        status.text = if (endpoint) "🇹🇷 Çeviri hazır ✓" else "🟢 Canlı çeviri"
-                    }
+                    if (sentenceId != latestSentenceId) return@withContext
+
+                    originalHistory += "👤 $speaker\n$text"
+                    translationHistory += "👤 $speaker\n$translated"
+
+                    sourceText.text =
+                        "ORİJİNAL • KONUŞMA GEÇMİŞİ\n\n" +
+                        originalHistory.joinToString("\n\n")
+
+                    translatedText.text =
+                        "TÜRKÇE • KONUŞMA GEÇMİŞİ\n\n" +
+                        translationHistory.joinToString("\n\n")
+
+                    status.text = "🟢 Çeviri hazır ✓"
                 }
-                if (endpoint && speakSwitch.isChecked && ttsReady) {
+
+                if (speakSwitch.isChecked && ttsReady) {
                     previewTts?.speak(
-                        translated.joinToString(" ") { it.substringAfter('\n') },
-                        TextToSpeech.QUEUE_ADD, null,
+                        translated,
+                        TextToSpeech.QUEUE_ADD,
+                        null,
                         "final_${sentenceId}_${System.currentTimeMillis()}"
                     )
                 }
+
             } catch (e: Exception) {
                 if (sentenceId == latestSentenceId) {
                     withContext(Dispatchers.Main) {
-                        translatedText.text = "TÜRKÇE • ÇEVİRİ\n\n⚠️ ${e.message ?: e.javaClass.simpleName}"
                         status.text = "Çeviri hatası"
                     }
                 }
@@ -374,6 +419,8 @@ class MainActivity : AppCompatActivity() {
         micChunker.stop(); stopPhoneIfNeeded()
         StreamingHub.setListener(null)
         streaming.stop()
+        diarization.reset()
+        diarization.release()
         previewTts?.stop(); previewTts?.shutdown(); previewTts = null
         translator.close()
         super.onDestroy()
