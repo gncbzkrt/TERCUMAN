@@ -89,7 +89,7 @@ class MainActivity : AppCompatActivity() {
         val root = ScrollView(this).apply { setBackgroundColor(Color.rgb(12, 27, 51)); isFillViewport = true }
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(14), dp(16), dp(20)) }
         col.addView(text("TERCÜMAN", 28f).apply { setTypeface(typeface, android.graphics.Typeface.BOLD) })
-        col.addView(text("v1.0.3 • gerçek streaming ASR • cihaz içi", 13f, Color.rgb(170,184,197)))
+        col.addView(text("v1.0.4 • gerçek streaming ASR • cihaz içi", 13f, Color.rgb(170,184,197)))
         status = text("Hazırlanıyor…", 14f, Color.rgb(85,214,190)); col.addView(status)
 
         modelButton = MaterialButton(this).apply { text = "STREAMING AI'YI HAZIRLA"; setOnClickListener { downloadModels() } }
@@ -112,7 +112,7 @@ class MainActivity : AppCompatActivity() {
 
         col.addView(card("ORİJİNAL • İNGİLİZCE • CANLI", "Konuşma burada anlık görünecek." ).also { sourceText = it.getChildAt(0) as TextView }, lp())
         col.addView(card("TÜRKÇE • STABİL ÇEVİRİ", "Cümle tamamlandığında temiz çeviri burada kalır." ).also { translatedText = it.getChildAt(0) as TextView }, lp())
-        col.addView(text("v1.0.3: Gerçek streaming devam eder. İngilizce metin anlık akar; Türkçe yalnızca cümle/ifade tamamlandığında güncellenir. Böylece yarım çeviriler ekrana ve sese düşmez.", 12f, Color.rgb(170,184,197)))
+        col.addView(text("v1.0.4: Streaming hızını korur; tamamlanan ifadeyi cümle olarak düzenleyip Türkçeye çevirir. Açık soru/cevap ayrımları korunur.", 12f, Color.rgb(170,184,197)))
         col.addView(text("Telefon sesi Android AudioPlaybackCapture izinleriyle alınır; kaynak uygulama yakalamayı engellerse ses gelmeyebilir.", 12f, Color.rgb(170,184,197)))
         root.addView(col)
         return root
@@ -227,20 +227,27 @@ class MainActivity : AppCompatActivity() {
     private fun translateFinalSentence(text: String) {
         lifecycleScope.launch {
             try {
-                val tr = withContext(Dispatchers.IO) { translator.translateEnglishToTurkish(text) }.trim()
-                if (tr.isBlank()) return@launch
+                val segments = SentenceStabilizer.splitAndNormalize(text)
+                if (segments.isEmpty()) return@launch
 
-                translatedHistory.addLast(tr)
-                while (translatedHistory.size > 3) translatedHistory.removeFirst()
+                val translatedSegments = mutableListOf<String>()
+                for (segment in segments) {
+                    val tr = withContext(Dispatchers.IO) { translator.translateEnglishToTurkish(segment) }.trim()
+                    if (tr.isNotBlank()) translatedSegments += tr
+                }
+                if (translatedSegments.isEmpty()) return@launch
+
+                for (tr in translatedSegments) {
+                    translatedHistory.addLast(tr)
+                    while (translatedHistory.size > 3) translatedHistory.removeFirst()
+                    if (speakSwitch.isChecked && ttsReady) {
+                        previewTts?.speak(tr, TextToSpeech.QUEUE_ADD, null, "final_${System.currentTimeMillis()}")
+                    }
+                }
+
                 val historyText = translatedHistory.joinToString("\n\n")
-
                 translatedText.text = "TÜRKÇE • STABİL\n\n$historyText"
                 status.text = "🇹🇷 Çeviri hazır ✓ • Yeni cümle bekleniyor"
-
-                // Ses yalnızca tamamlanmış cümleyi okur; yarım partial'lar seslendirilmez.
-                if (speakSwitch.isChecked && ttsReady) {
-                    previewTts?.speak(tr, TextToSpeech.QUEUE_ADD, null, "final_${System.currentTimeMillis()}")
-                }
             } catch (e: Exception) {
                 translatedText.text = "TÜRKÇE • STABİL\n\n⚠️ Çeviri: ${e.message ?: e.javaClass.simpleName}"
                 status.text = "Çeviri hatası"
