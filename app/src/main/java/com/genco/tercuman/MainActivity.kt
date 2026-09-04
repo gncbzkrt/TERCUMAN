@@ -51,11 +51,23 @@ class MainActivity : AppCompatActivity() {
     private var sentenceSequence = 0L
     private var latestSentenceId = 0L
     private val audioMutex = kotlinx.coroutines.sync.Mutex()
-    private var liveTranslationJob: kotlinx.coroutines.Job? = null
     private var translationTextSize = 20f
     private var lastCommittedEnglish = ""
     private val originalHistory = mutableListOf<String>()
     private val translationHistory = mutableListOf<String>()
+
+    private data class ConversationLine(
+        val sentenceId: Long,
+        var speaker: String,
+        val original: String,
+        var translated: String = ""
+    )
+
+    /*
+     * Each completed sentence has its own identity.
+     * Translation and speaker diarization may finish at different times.
+     */
+    private val conversationLines = linkedMapOf<Long, ConversationLine>()
 
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { updateStatus() }
     private val projectionLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -68,7 +80,7 @@ class MainActivity : AppCompatActivity() {
         modelManager = ModelManager(this)
         diarization = SpeakerDiarizationEngine(this, modelManager.modelRoot)
         translator = TranslationEngine()
-        streaming = StreamingEnglishEngine(this, modelManager.streamingDir)
+        streaming = StreamingEnglishEngine(modelManager.streamingDir)
         micChunker = MicrophoneChunker(this) { pcm, rate -> StreamingHub.emit(pcm, rate) }
         setContentView(buildUi())
         initPreviewTts()
@@ -311,85 +323,178 @@ class MainActivity : AppCompatActivity() {
         phoneOn = false; phoneButton.text = "📱 TELEFON SESİ"; status.text = "Telefon sesi durduruldu."
     }
 
+    private var lastPartialShownAt = 0L
+    private var lastPartialShown = ""
+
     private suspend fun handleAudio(pcm: ShortArray, sampleRate: Int) {
         try {
+            /*
+             * IMPORTANT:
+             * Diarization only receives the audio here.
+             * Heavy speaker analysis is NEVER performed inside this
+             * real-time audio path.
+             */
             diarization.addPcm16(pcm, sampleRate)
 
             val result = streaming.acceptPcm16(pcm, sampleRate)
-            val partial = result.first.trim()
-            val endpoint = result.second
+            val partial = result.text.trim()
+            val endpoint = result.endpoint
 
             if (partial.isBlank()) return
 
+            /*
+             * PARTIAL ASR:
+             *
+             * Show a lightweight live preview, but NEVER translate it
+             * and NEVER append it to conversation history.
+             *
+             * Throttle UI updates so the screen does not churn
+             * word-by-word.
+             */
             if (!endpoint) {
-                withContext(Dispatchers.Main) {
-                    status.text = "🟢 Konuşma algılanıyor…"
+                val now = System.currentTimeMillis()
+
+                val changedEnough =
+                    lastPartialShown.isBlank() ||
+                    partial != lastPartialShown
+
+                val enoughTimePassed =
+                    now - lastPartialShownAt >= 300L
+
+                if (changedEnough && enoughTimePassed) {
+                    lastPartialShown = partial
+                    lastPartialShownAt = now
+
+                    withContext(Dispatchers.Main) {
+                        status.text = "🟢 Konuşma algılanıyor..."
+
+                        sourceText.text =
+                            "ORİJİNAL • CANLI\n\n$partial"
+                    }
                 }
+
                 return
             }
 
+            /*
+             * ENDPOINT:
+             *
+             * Only a completed/stable sentence reaches translation.
+             */
             val stableEnglish = partial
                 .replace(Regex("\\s+"), " ")
                 .trim()
 
-            if (stableEnglish.isBlank() || stableEnglish == lastCommittedEnglish) {
+            if (
+                stableEnglish.isBlank() ||
+                stableEnglish == lastCommittedEnglish
+            ) {
                 return
             }
 
             lastCommittedEnglish = stableEnglish
 
-            val speaker = diarization.currentSpeaker()
-            val sentenceId = ++sentenceSequence
-            latestSentenceId = sentenceId
+            val sentenceId = ++latestSentenceId
 
+            lastPartialShown = ""
+            lastPartialShownAt = 0L
+
+            /*
+             * Do NOT run currentSpeaker() here.
+             *
+             * It is an offline diarization operation and can be
+             * considerably heavier than streaming ASR.
+             *
+             * It is launched independently below.
+             */
             withContext(Dispatchers.Main) {
-                status.text = "🧠 $speaker konuştu • Türkçe çevriliyor…"
+                status.text = "🟡 Cümle tamamlandı • Çeviriliyor..."
             }
 
             scheduleFinalTranslation(
                 text = stableEnglish,
-                speaker = speaker,
                 sentenceId = sentenceId
             )
 
+            /*
+             * Speaker analysis runs independently.
+             * It can no longer block the incoming audio/ASR chain.
+             *
+             * The current speaker result is used to update the
+             * conversation label when available.
+             */
+            lifecycleScope.launch(Dispatchers.Default) {
+                try {
+                    val speaker = diarization.currentSpeaker()
+
+                    withContext(Dispatchers.Main) {
+                        /*
+                         * Speaker result is intentionally handled
+                         * separately from ASR/translation timing.
+                         */
+                        updateLatestSpeakerLabel(
+                            sentenceId = sentenceId,
+                            speaker = speaker
+                        )
+                    }
+                } catch (_: Exception) {
+                    // Speaker analysis must never interrupt translation.
+                }
+            }
+
         } catch (e: Exception) {
             withContext(Dispatchers.Main) {
-                status.text = "Streaming ASR hatası: ${e.message ?: e.javaClass.simpleName}"
+                status.text =
+                    "🔴 Streaming ASR hatası: ${e.message ?: e.javaClass.simpleName}"
             }
         }
     }
 
     private fun scheduleFinalTranslation(
         text: String,
-        speaker: String,
         sentenceId: Long
     ) {
-        liveTranslationJob?.cancel()
-
-        liveTranslationJob = lifecycleScope.launch {
+        /*
+         * v1.2.0:
+         *
+         * Never cancel a previous translation.
+         * Every completed sentence owns its own translation job.
+         */
+        lifecycleScope.launch {
             try {
+                /*
+                 * Create the conversation line on Main.
+                 * This keeps conversationLines thread-safe.
+                 *
+                 * Speaker is initially A only as a temporary placeholder.
+                 * Real local diarization may update it asynchronously.
+                 */
+                conversationLines[sentenceId] = ConversationLine(
+                    sentenceId = sentenceId,
+                    speaker = "A",
+                    original = text
+                )
+
+                renderConversationHistory()
+
                 val translated = withContext(Dispatchers.IO) {
-                    translator.translateEnglishToTurkish(text)
-                }.trim()
-
-                if (translated.isBlank() || sentenceId != latestSentenceId) return@launch
-
-                withContext(Dispatchers.Main) {
-                    if (sentenceId != latestSentenceId) return@withContext
-
-                    originalHistory += "👤 $speaker\n$text"
-                    translationHistory += "👤 $speaker\n$translated"
-
-                    sourceText.text =
-                        "ORİJİNAL • KONUŞMA GEÇMİŞİ\n\n" +
-                        originalHistory.joinToString("\n\n")
-
-                    translatedText.text =
-                        "TÜRKÇE • KONUŞMA GEÇMİŞİ\n\n" +
-                        translationHistory.joinToString("\n\n")
-
-                    status.text = "🟢 Çeviri hazır ✓"
+                    translator
+                        .translateEnglishToTurkish(text)
+                        .trim()
                 }
+
+                if (translated.isBlank()) {
+                    return@launch
+                }
+
+                val line = conversationLines[sentenceId]
+                    ?: return@launch
+
+                line.translated = translated
+
+                renderConversationHistory()
+
+                status.text = "🟢 Çeviri hazır ✓"
 
                 if (speakSwitch.isChecked && ttsReady) {
                     previewTts?.speak(
@@ -401,13 +506,70 @@ class MainActivity : AppCompatActivity() {
                 }
 
             } catch (e: Exception) {
-                if (sentenceId == latestSentenceId) {
-                    withContext(Dispatchers.Main) {
-                        status.text = "Çeviri hatası"
-                    }
+                withContext(Dispatchers.Main) {
+                    status.text = "🟠 Çeviri hatası"
                 }
             }
         }
+    }
+
+    /**
+     * Speaker diarization finishes independently from translation.
+     *
+     * Only the matching sentenceId is updated.
+     * A late speaker result can therefore never overwrite another
+     * conversation line.
+     */
+    private fun updateLatestSpeakerLabel(
+        sentenceId: Long,
+        speaker: String
+    ) {
+        if (speaker != "A" && speaker != "B") {
+            return
+        }
+
+        val line = conversationLines[sentenceId]
+            ?: return
+
+        line.speaker = speaker
+
+        renderConversationHistory()
+    }
+
+    /**
+     * Render only completed conversation lines.
+     *
+     * Streaming partial ASR is intentionally NOT stored here.
+     */
+    private fun renderConversationHistory() {
+        val ordered = conversationLines
+            .values
+            .sortedBy { it.sentenceId }
+
+        originalHistory.clear()
+        translationHistory.clear()
+
+        for (line in ordered) {
+            originalHistory +=
+                "👤 ${line.speaker}\n${line.original}"
+
+            if (line.translated.isNotBlank()) {
+                translationHistory +=
+                    "👤 ${line.speaker}\n${line.translated}"
+            }
+        }
+
+        sourceText.text =
+            "ORİJİNAL • KONUŞMA GEÇMİŞİ\n\n" +
+                originalHistory.joinToString("\n\n")
+
+        translatedText.text =
+            "TÜRKÇE • KONUŞMA GEÇMİŞİ\n\n" +
+                if (translationHistory.isEmpty()) {
+                    "Çeviri hazırlanıyor..."
+                } else {
+                    translationHistory.joinToString("\n\n")
+                }
     }
 
     private fun updateStatus() {
@@ -415,7 +577,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        liveTranslationJob?.cancel()
         micChunker.stop(); stopPhoneIfNeeded()
         StreamingHub.setListener(null)
         streaming.stop()

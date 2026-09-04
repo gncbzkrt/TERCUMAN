@@ -44,6 +44,9 @@ class SpeakerDiarizationEngine(
     private var previousSegments = emptyList<LabeledSegment>()
     private var previousSpeaker = "A"
 
+    /* Heavy speaker analysis is serialized separately from audio buffering. */
+    private val analysisLock = Any()
+
     fun start() {
         release()
 
@@ -117,51 +120,91 @@ class SpeakerDiarizationEngine(
      * Analyze the current rolling window and return the speaker
      * associated with the most recent speech segment.
      */
-    @Synchronized
+    /**
+     * Analyze the latest rolling audio window.
+     *
+     * IMPORTANT:
+     * The audio buffer is locked only long enough to copy a snapshot.
+     * The expensive engine.process() call happens OUTSIDE the audio
+     * buffer lock, so incoming ASR audio can continue uninterrupted.
+     */
     fun currentSpeaker(): String {
         val engine = diarizer ?: return previousSpeaker
 
-        if (pcmBuffer.size < (SAMPLE_RATE * MIN_SECONDS).toInt()) {
-            return previousSpeaker
-        }
+        val samples: FloatArray
+        val snapshotStartSeconds: Double
 
-        return try {
-            val samples = FloatArray(pcmBuffer.size)
+        /*
+         * Take a very short snapshot of the rolling audio buffer.
+         * No heavy ML work is allowed inside this synchronized block.
+         */
+        synchronized(this) {
+            if (pcmBuffer.size < (SAMPLE_RATE * MIN_SECONDS).toInt()) {
+                return previousSpeaker
+            }
+
+            samples = FloatArray(pcmBuffer.size)
+
             for (i in pcmBuffer.indices) {
                 samples[i] = pcmBuffer[i]
             }
 
-            val segments = engine.process(samples)
-                .filter { it.end > it.start }
-                .sortedBy { it.start }
+            snapshotStartSeconds = bufferStartSeconds
+        }
 
-            if (segments.isEmpty()) {
-                previousSpeaker
-            } else {
+        /*
+         * Serialize expensive diarization calculations, but use a
+         * DIFFERENT lock from the real-time audio buffer lock.
+         */
+        return synchronized(analysisLock) {
+            try {
+                val segments = engine.process(samples)
+                    .filter { it.end > it.start }
+                    .sortedBy { it.start }
+
+                if (segments.isEmpty()) {
+                    return@synchronized previousSpeaker
+                }
+
                 val current = segments.map {
                     LabeledSegment(
-                        start = bufferStartSeconds + it.start,
-                        end = bufferStartSeconds + it.end,
+                        start = snapshotStartSeconds + it.start,
+                        end = snapshotStartSeconds + it.end,
                         speaker = "C${it.speaker}"
                     )
                 }
 
-                val mapping = buildMapping(current, previousSegments)
+                /*
+                 * previousSegments / previousSpeaker are shared state.
+                 * Update them only after the expensive processing has
+                 * completed.
+                 */
+                synchronized(this) {
+                    val mapping = buildMapping(current, previousSegments)
 
-                val latest = current.maxByOrNull { it.end }!!
-                val mapped = mapping[latest.speaker]
+                    val latest = current.maxByOrNull { it.end }
+                        ?: return@synchronized previousSpeaker
 
-                val result = mapped ?: if (previousSpeaker == "A") "B" else "A"
+                    val mapped = mapping[latest.speaker]
 
-                previousSegments = current.map {
-                    it.copy(speaker = mapping[it.speaker] ?: previousSpeaker)
+                    val result =
+                        mapped ?: if (previousSpeaker == "A") "B" else "A"
+
+                    previousSegments = current.map {
+                        it.copy(
+                            speaker = mapping[it.speaker] ?: previousSpeaker
+                        )
+                    }
+
+                    previousSpeaker = result
+                    result
                 }
 
-                previousSpeaker = result
-                result
+            } catch (_: Throwable) {
+                synchronized(this) {
+                    previousSpeaker
+                }
             }
-        } catch (_: Throwable) {
-            previousSpeaker
         }
     }
 
