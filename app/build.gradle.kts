@@ -17,8 +17,8 @@ android {
         applicationId = "com.genco.tercuman"
         minSdk = 29
         targetSdk = 35
-        versionCode = 25
-        versionName = "1.3.2"
+        versionCode = 26
+        versionName = "1.4.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -56,16 +56,13 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
 
     packaging {
         resources.excludes += setOf("META-INF/AL2.0", "META-INF/LGPL2.1")
         jniLibs.useLegacyPackaging = false
-    }
-}
-
-kotlin {
-    compilerOptions {
-        jvmTarget.set(JvmTarget.JVM_17)
     }
 }
 
@@ -93,4 +90,11 @@ dependencies {
 
     // Supertonic model paketini (.tar.bz2) telefonda açmak için.
     implementation("org.apache.commons:commons-compress:1.27.1")
+}
+
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_17)
+    }
 }
