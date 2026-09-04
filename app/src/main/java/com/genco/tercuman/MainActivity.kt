@@ -23,6 +23,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
@@ -45,6 +47,9 @@ class MainActivity : AppCompatActivity() {
     private var phoneOn = false
     private var ready = false
     private var lastEnglish = ""
+    private var sentenceSequence = 0L
+    private val translationMutex = Mutex()
+    private val audioMutex = Mutex()
     private val translatedHistory = ArrayDeque<String>()
 
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { updateStatus() }
@@ -64,7 +69,7 @@ class MainActivity : AppCompatActivity() {
         requestBasePermissions()
         StreamingHub.setListener { chunk ->
             if (!ready) return@setListener
-            lifecycleScope.launch(Dispatchers.Default) { handleAudio(chunk.pcm, chunk.sampleRate) }
+            lifecycleScope.launch(Dispatchers.Default) { audioMutex.withLock { handleAudio(chunk.pcm, chunk.sampleRate) } }
         }
         updateStatus()
     }
@@ -89,7 +94,7 @@ class MainActivity : AppCompatActivity() {
         val root = ScrollView(this).apply { setBackgroundColor(Color.rgb(12, 27, 51)); isFillViewport = true }
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(14), dp(16), dp(20)) }
         col.addView(text("TERCÜMAN", 28f).apply { setTypeface(typeface, android.graphics.Typeface.BOLD) })
-        col.addView(text("v1.0.4 • gerçek streaming ASR • cihaz içi", 13f, Color.rgb(170,184,197)))
+        col.addView(text("v1.0.5 • gerçek streaming ASR • cihaz içi", 13f, Color.rgb(170,184,197)))
         status = text("Hazırlanıyor…", 14f, Color.rgb(85,214,190)); col.addView(status)
 
         modelButton = MaterialButton(this).apply { text = "STREAMING AI'YI HAZIRLA"; setOnClickListener { downloadModels() } }
@@ -112,7 +117,7 @@ class MainActivity : AppCompatActivity() {
 
         col.addView(card("ORİJİNAL • İNGİLİZCE • CANLI", "Konuşma burada anlık görünecek." ).also { sourceText = it.getChildAt(0) as TextView }, lp())
         col.addView(card("TÜRKÇE • STABİL ÇEVİRİ", "Cümle tamamlandığında temiz çeviri burada kalır." ).also { translatedText = it.getChildAt(0) as TextView }, lp())
-        col.addView(text("v1.0.4: Streaming hızını korur; tamamlanan ifadeyi cümle olarak düzenleyip Türkçeye çevirir. Açık soru/cevap ayrımları korunur.", 12f, Color.rgb(170,184,197)))
+        col.addView(text("v1.0.5: Streaming hızını korur; her tamamlanan İngilizce cümleyi tek çeviri işlemi olarak sırayla işler ve eski çevirinin yeni cümleyle karışmasını engeller.", 12f, Color.rgb(170,184,197)))
         col.addView(text("Telefon sesi Android AudioPlaybackCapture izinleriyle alınır; kaynak uygulama yakalamayı engellerse ses gelmeyebilir.", 12f, Color.rgb(170,184,197)))
         root.addView(col)
         return root
@@ -200,8 +205,6 @@ class MainActivity : AppCompatActivity() {
             val endpoint = result.second
             if (partial.isBlank()) return
 
-            // Streaming ASR'nin anlık çıktısını kaybetmeden göster.
-            // Aynı metni tekrar tekrar UI'ye yazmayı önle.
             if (partial != lastEnglish) {
                 lastEnglish = partial
                 withContext(Dispatchers.Main) {
@@ -214,9 +217,10 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            // Kritik stabilizasyon: yarım ASR metnini çevirmiyoruz.
-            // Yalnızca endpoint geldiğinde tam ifadeyi ML Kit'e gönderiyoruz.
-            if (endpoint) translateFinalSentence(partial)
+            if (endpoint) {
+                val id = ++sentenceSequence
+                translateFinalSentence(partial, id)
+            }
         } catch (e: Exception) {
             withContext(Dispatchers.Main) {
                 status.text = "Streaming ASR hatası: ${e.message ?: e.javaClass.simpleName}"
@@ -224,33 +228,52 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun translateFinalSentence(text: String) {
+    private fun translateFinalSentence(text: String, sentenceId: Long) {
         lifecycleScope.launch {
-            try {
-                val segments = SentenceStabilizer.splitAndNormalize(text)
-                if (segments.isEmpty()) return@launch
+            translationMutex.withLock {
+                try {
+                    withContext(Dispatchers.Main) {
+                        translatedText.text = "TÜRKÇE • ÇEVRİLİYOR…\n\n$text"
+                    }
 
-                val translatedSegments = mutableListOf<String>()
-                for (segment in segments) {
-                    val tr = withContext(Dispatchers.IO) { translator.translateEnglishToTurkish(segment) }.trim()
-                    if (tr.isNotBlank()) translatedSegments += tr
-                }
-                if (translatedSegments.isEmpty()) return@launch
+                    val segments = SentenceStabilizer.splitAndNormalize(text)
+                    if (segments.isEmpty()) return@withLock
 
-                for (tr in translatedSegments) {
-                    translatedHistory.addLast(tr)
+                    val translatedSegments = mutableListOf<String>()
+                    for (segment in segments) {
+                        val tr = withContext(Dispatchers.IO) {
+                            translator.translateEnglishToTurkish(segment)
+                        }.trim()
+                        if (tr.isNotBlank()) translatedSegments += tr
+                    }
+                    if (translatedSegments.isEmpty()) return@withLock
+
+                    val fullTranslation = translatedSegments.joinToString(" ")
+                    val previousHistory = translatedHistory.toList().asReversed()
+                    translatedHistory.addLast(fullTranslation)
                     while (translatedHistory.size > 3) translatedHistory.removeFirst()
+
+                    withContext(Dispatchers.Main) {
+                        val historyText = previousHistory.take(2).joinToString("\n\n")
+                        val previousBlock = if (historyText.isBlank()) "" else "\n\n──────\nÖNCEKİ ÇEVİRİLER\n\n$historyText"
+                        translatedText.text = "TÜRKÇE • STABİL\n\n$fullTranslation$previousBlock"
+                        status.text = "🇹🇷 Çeviri hazır ✓ • Yeni cümle bekleniyor"
+                    }
+
                     if (speakSwitch.isChecked && ttsReady) {
-                        previewTts?.speak(tr, TextToSpeech.QUEUE_ADD, null, "final_${System.currentTimeMillis()}")
+                        previewTts?.speak(
+                            fullTranslation,
+                            TextToSpeech.QUEUE_ADD,
+                            null,
+                            "final_${sentenceId}_${System.currentTimeMillis()}"
+                        )
+                    }
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        translatedText.text = "TÜRKÇE • ÇEVİRİ HATASI\n\n⚠️ ${e.message ?: e.javaClass.simpleName}"
+                        status.text = "Çeviri hatası"
                     }
                 }
-
-                val historyText = translatedHistory.joinToString("\n\n")
-                translatedText.text = "TÜRKÇE • STABİL\n\n$historyText"
-                status.text = "🇹🇷 Çeviri hazır ✓ • Yeni cümle bekleniyor"
-            } catch (e: Exception) {
-                translatedText.text = "TÜRKÇE • STABİL\n\n⚠️ Çeviri: ${e.message ?: e.javaClass.simpleName}"
-                status.text = "Çeviri hatası"
             }
         }
     }
