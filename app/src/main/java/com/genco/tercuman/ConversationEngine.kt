@@ -2,8 +2,8 @@ package com.genco.tercuman
 
 /**
  * Lightweight local conversation formatter.
- * It does not claim to perform biometric speaker diarization; it infers turns
- * from sentence/question/answer structure and keeps the A/B order stable.
+ * It does not perform biometric speaker diarization; it infers turns from
+ * punctuation/question-answer structure and preserves A/B order.
  */
 object ConversationEngine {
     data class Turn(val text: String, val speaker: String)
@@ -31,23 +31,19 @@ object ConversationEngine {
         if (pieces.isEmpty()) return emptyList()
 
         val turns = mutableListOf<Turn>()
-        var nextSpeaker = "A"
         var previousWasQuestion = false
         for (piece in pieces) {
-            val isQuestion = piece.endsWith("?") || questionCue.containsMatchIn(piece.take(32))
+            val isQuestion = piece.endsWith("?") || questionCue.containsMatchIn(piece.take(40))
             val isAnswer = answerCue.containsMatchIn(piece)
             val speaker = when {
                 turns.isEmpty() -> "A"
                 previousWasQuestion && isAnswer -> "B"
-                !previousWasQuestion && isQuestion -> "A"
-                else -> {
-                    nextSpeaker = if (turns.last().speaker == "A") "B" else "A"
-                    nextSpeaker
-                }
+                previousWasQuestion -> "B"
+                isQuestion -> "A"
+                else -> if (turns.last().speaker == "A") "B" else "A"
             }
             turns += Turn(piece, speaker)
             previousWasQuestion = isQuestion
-            nextSpeaker = if (speaker == "A") "B" else "A"
         }
         return turns
     }

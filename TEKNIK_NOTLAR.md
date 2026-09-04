@@ -19,7 +19,7 @@ Partial İngilizce metin yaklaşık 650 ms aralıklarla ML Kit EN→TR'ye gönde
 ## Sınırlar
 Android playback capture kaynak uygulamanın capture politikasına ve MediaProjection iznine bağlıdır. Bazı uygulamalar/DRM içerikler yakalanamaz.
 
-## v1.0.8 Conversation/UI paketi
+## v1.0.9 Conversation/UI paketi
 - Hafif yerel ConversationEngine eklendi: ham ASR metnini parçalara ayırır, belirgin soru/cevap yapılarını ve A/B konuşma sırasını sezgisel olarak düzenler.
 - Bu katman biyometrik speaker diarization değildir; tek mikrofonlu iki kişilik konuşmada konuşmacı ayrımı heuristik olarak yapılır.
 - Türkçe çeviri alanı ana odak haline getirildi ve 20sp mevcut üst sınır olarak korundu.

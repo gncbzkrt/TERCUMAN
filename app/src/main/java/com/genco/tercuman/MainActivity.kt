@@ -23,8 +23,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
@@ -50,9 +48,8 @@ class MainActivity : AppCompatActivity() {
     private var lastEnglish = ""
     private var sentenceSequence = 0L
     private var latestSentenceId = 0L
-    private val translationMutex = Mutex()
-    private val audioMutex = Mutex()
-    private val translatedHistory = ArrayDeque<String>()
+    private val audioMutex = kotlinx.coroutines.sync.Mutex()
+    private var liveTranslationJob: kotlinx.coroutines.Job? = null
     private var translationTextSize = 20f
 
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { updateStatus() }
@@ -100,50 +97,76 @@ class MainActivity : AppCompatActivity() {
         }
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(8), dp(14), dp(14))
+            setPadding(dp(12), dp(6), dp(12), dp(12))
         }
 
-        col.addView(text("TERCÜMAN", 26f).apply { setTypeface(typeface, android.graphics.Typeface.BOLD) })
-        col.addView(text("v1.0.8 • streaming konuşma motoru • cihaz içi", 12f, Color.rgb(170,184,197)))
-        status = text("Hazırlanıyor…", 13f, Color.rgb(85,214,190))
-        col.addView(status)
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        header.addView(
+            text("TERCÜMAN", 25f).apply { setTypeface(typeface, android.graphics.Typeface.BOLD) },
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        )
+        modelButton = MaterialButton(this).apply {
+            text = "AI HAZIRLA"
+            textSize = 10f
+            minHeight = 0
+            minimumHeight = 0
+            setPadding(dp(8), 0, dp(8), 0)
+            setOnClickListener { downloadModels() }
+        }
+        header.addView(modelButton, LinearLayout.LayoutParams(dp(112), dp(38)))
+        col.addView(header)
 
-        modelButton = compactButton("AI HAZIRLA") { downloadModels() }
-        col.addView(modelButton, lp(8))
+        status = text("Hazırlanıyor…", 12f, Color.rgb(85,214,190))
+        col.addView(status, lp(0))
 
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
         micButton = compactButton("🎤 DIŞ SES") { toggleMic() }
         phoneButton = compactButton("📱 TELEFON SESİ") { togglePhone() }
-        row.addView(micButton, LinearLayout.LayoutParams(0, dp(50), 1f).apply { marginEnd = dp(4) })
-        row.addView(phoneButton, LinearLayout.LayoutParams(0, dp(50), 1f).apply { marginStart = dp(4) })
-        col.addView(row, lp(6))
+        row.addView(micButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(3) })
+        row.addView(phoneButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginStart = dp(3) })
+        col.addView(row, lp(5))
 
         val voiceRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        speakSwitch = Switch(this).apply { text = "Türkçeyi seslendir"; setTextColor(Color.WHITE); isChecked = false }
+        speakSwitch = Switch(this).apply {
+            text = "Türkçeyi seslendir"
+            setTextColor(Color.WHITE)
+            isChecked = false
+            textSize = 14f
+        }
         voiceRow.addView(speakSwitch, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         val preview = compactButton("▶ ÖNİZLEME") { previewSpeech() }
-        voiceRow.addView(preview, LinearLayout.LayoutParams(dp(125), dp(46)))
-        col.addView(voiceRow, lp(4))
+        voiceRow.addView(preview, LinearLayout.LayoutParams(dp(112), dp(42)))
+        col.addView(voiceRow, lp(2))
 
-        col.addView(card("ORİJİNAL • CANLI", "Konuşma bekleniyor…", 16f, dp(90)).also { sourceText = it.getChildAt(0) as TextView }, lp(8))
+        col.addView(card("ORİJİNAL • CANLI", "Konuşma bekleniyor…", 15f, dp(82)).also {
+            sourceText = it.getChildAt(0) as TextView
+        }, lp(4))
 
         val translationTitleRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        translationTitleRow.addView(text("TÜRKÇE • ÇEVİRİ", 18f).apply { setTypeface(typeface, android.graphics.Typeface.BOLD) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        translationTitleRow.addView(
+            text("TÜRKÇE • ÇEVİRİ", 19f).apply { setTypeface(typeface, android.graphics.Typeface.BOLD) },
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        )
         val minus = smallButton("−") { setTranslationTextSize(translationTextSize - 2f) }
         translationSizeText = text("20", 14f, Color.rgb(170,184,197)).apply { gravity = Gravity.CENTER }
         val plus = smallButton("+") { setTranslationTextSize(translationTextSize + 2f) }
         translationTitleRow.addView(minus, LinearLayout.LayoutParams(dp(44), dp(42)))
         translationTitleRow.addView(translationSizeText, LinearLayout.LayoutParams(dp(34), dp(42)))
         translationTitleRow.addView(plus, LinearLayout.LayoutParams(dp(44), dp(42)))
-        col.addView(translationTitleRow, lp(6))
+        col.addView(translationTitleRow, lp(4))
 
-        col.addView(translationCard().also { translatedText = it.getChildAt(0) as TextView }, lp(4))
+        col.addView(translationCard().also { translatedText = it.getChildAt(0) as TextView }, lp(2))
         root.addView(col)
         return root
     }
@@ -172,7 +195,7 @@ class MainActivity : AppCompatActivity() {
             textSize = translationTextSize
             setTextColor(Color.WHITE)
             setPadding(dp(18), dp(18), dp(18), dp(18))
-            minHeight = dp(360)
+            minHeight = dp(560)
             gravity = Gravity.TOP or Gravity.START
         }
         return MaterialCardView(this).apply {
@@ -242,7 +265,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun toggleMic() {
-        if (!ready) { status.text = "Önce STREAMING AI'YI HAZIRLA."; return }
+        if (!ready) { status.text = "Önce sağ üstten AI HAZIRLA."; return }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { requestBasePermissions(); return }
         if (micOn) {
             micChunker.stop(); micOn = false; micButton.text = "🎤 DIŞ SES"; status.text = "Mikrofon durduruldu."
@@ -255,7 +278,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun togglePhone() {
-        if (!ready) { status.text = "Önce STREAMING AI'YI HAZIRLA."; return }
+        if (!ready) { status.text = "Önce sağ üstten AI HAZIRLA."; return }
         if (phoneOn) stopPhoneIfNeeded() else {
             micChunker.stop(); micOn = false; micButton.text = "🎤 DIŞ SES"
             val mgr = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
@@ -286,61 +309,55 @@ class MainActivity : AppCompatActivity() {
 
             if (partial != lastEnglish) {
                 lastEnglish = partial
-                withContext(Dispatchers.Main) {
-                    sourceText.text = "ORİJİNAL • CANLI\n\n$partial"
-                    if (!endpoint) {
-                        translatedText.text = "TÜRKÇE • BEKLENİYOR\n\nCümle tamamlanıyor…"
-                    }
-                    status.text = if (endpoint) "🧠 Cümle tamamlandı • Türkçe hazırlanıyor…" else "🟢 Canlı konuşma algılanıyor…"
-                }
-            }
-
-            if (endpoint && !SentenceStabilizer.looksIncomplete(partial)) {
                 val id = ++sentenceSequence
                 latestSentenceId = id
                 withContext(Dispatchers.Main) {
-                    translatedText.text = "TÜRKÇE • ÇEVRİLİYOR…\n\n$partial"
-                    status.text = "🧠 Konuşma düzenleniyor • Türkçe hazırlanıyor…"
+                    sourceText.text = "ORİJİNAL • CANLI\n\n$partial"
+                    status.text = if (endpoint) "🧠 Cümle tamamlandı • Türkçe güncelleniyor…" else "🟢 Canlı konuşma algılanıyor…"
                 }
-                translateFinalSentence(partial, id)
+                scheduleLiveTranslation(partial, id, endpoint)
             }
         } catch (e: Exception) {
             withContext(Dispatchers.Main) { status.text = "Streaming ASR hatası: ${e.message ?: e.javaClass.simpleName}" }
         }
     }
 
-    private fun translateFinalSentence(text: String, sentenceId: Long) {
-        lifecycleScope.launch {
-            translationMutex.withLock {
-                try {
-                    val turns = ConversationEngine.format(text)
-                    if (turns.isEmpty()) return@withLock
-                    val translated = mutableListOf<String>()
-                    for (turn in turns) {
-                        val tr = withContext(Dispatchers.IO) { translator.translateEnglishToTurkish(turn.text) }.trim()
-                        if (tr.isNotBlank()) translated += "👤 ${turn.speaker}\n$tr"
+    /**
+     * Translation is deliberately non-blocking: partial ASR is translated quickly,
+     * then the completed utterance is translated once more for a cleaner result.
+     */
+    private fun scheduleLiveTranslation(text: String, sentenceId: Long, endpoint: Boolean) {
+        liveTranslationJob?.cancel()
+        liveTranslationJob = lifecycleScope.launch {
+            delay(if (endpoint) 40L else 180L)
+            try {
+                val turns = ConversationEngine.format(text)
+                if (turns.isEmpty()) return@launch
+                val translated = mutableListOf<String>()
+                for (turn in turns) {
+                    val tr = withContext(Dispatchers.IO) { translator.translateEnglishToTurkish(turn.text) }.trim()
+                    if (tr.isNotBlank()) translated += "👤 ${turn.speaker}\n$tr"
+                }
+                if (translated.isEmpty() || sentenceId != latestSentenceId) return@launch
+                val full = translated.joinToString("\n\n")
+                withContext(Dispatchers.Main) {
+                    if (sentenceId == latestSentenceId) {
+                        translatedText.text = "TÜRKÇE • ${if (endpoint) "STABİL" else "CANLI"}\n\n$full"
+                        status.text = if (endpoint) "🇹🇷 Çeviri hazır ✓" else "🟢 Canlı çeviri"
                     }
-                    if (translated.isEmpty()) return@withLock
-                    val fullTranslation = translated.joinToString("\n\n")
-
+                }
+                if (endpoint && speakSwitch.isChecked && ttsReady) {
+                    previewTts?.speak(
+                        translated.joinToString(" ") { it.substringAfter('\n') },
+                        TextToSpeech.QUEUE_ADD, null,
+                        "final_${sentenceId}_${System.currentTimeMillis()}"
+                    )
+                }
+            } catch (e: Exception) {
+                if (sentenceId == latestSentenceId) {
                     withContext(Dispatchers.Main) {
-                        if (sentenceId != latestSentenceId) return@withContext
-                        translatedText.text = "TÜRKÇE • STABİL\n\n$fullTranslation"
-                        status.text = "🇹🇷 Çeviri hazır ✓ • Yeni konuşma bekleniyor"
-                    }
-
-                    if (speakSwitch.isChecked && ttsReady) {
-                        previewTts?.speak(
-                            translated.filter { it.isNotBlank() }.joinToString(" ") { it.substringAfter('\n') },
-                            TextToSpeech.QUEUE_ADD, null, "final_${sentenceId}_${System.currentTimeMillis()}"
-                        )
-                    }
-                } catch (e: Exception) {
-                    withContext(Dispatchers.Main) {
-                        if (sentenceId == latestSentenceId) {
-                            translatedText.text = "TÜRKÇE • ÇEVİRİ HATASI\n\n⚠️ ${e.message ?: e.javaClass.simpleName}"
-                            status.text = "Çeviri hatası"
-                        }
+                        translatedText.text = "TÜRKÇE • ÇEVİRİ\n\n⚠️ ${e.message ?: e.javaClass.simpleName}"
+                        status.text = "Çeviri hatası"
                     }
                 }
             }
@@ -348,10 +365,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateStatus() {
-        if (!modelManager.streamingReady()) status.text = "İlk kullanım: STREAMING AI'YI HAZIRLA'ya dokun."
+        if (!modelManager.streamingReady()) status.text = "İlk kullanım: sağ üstteki AI HAZIR ✓ alanına dokun."
     }
 
     override fun onDestroy() {
+        liveTranslationJob?.cancel()
         micChunker.stop(); stopPhoneIfNeeded()
         StreamingHub.setListener(null)
         streaming.stop()
