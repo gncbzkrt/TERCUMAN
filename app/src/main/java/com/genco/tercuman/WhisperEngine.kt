@@ -15,7 +15,7 @@ class WhisperEngine(private val context: Context, private val manager: ModelMana
     suspend fun transcribe(wav: File): String = mutex.withLock {
         if (!manager.whisperReady()) error("Whisper modeli yüklü değil")
         val active = model ?: Whisper.loadModel(context, manager.whisperFile.absolutePath).also { model = it }
-        val result = Whisper.transcribe(active, wav.absolutePath, WhisperConfig(language = "en"))
+        val result = Whisper.transcribe(active, wav.absolutePath, WhisperConfig())
         result.text.trim()
     }
 

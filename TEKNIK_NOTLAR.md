@@ -1,17 +1,20 @@
-# TERCÜMAN v0.10.0 Teknik Notlar
+# TERCÜMAN v1.0.0 teknik notları
 
-- Temel ses yakalama hattı v0.1 ile aynı tutuldu.
-- Mikrofon: 16 kHz mono, 4 saniyelik WAV.
-- Telefon sesi: 48 kHz mono, 4 saniyelik WAV.
-- Whisper: ggml-base.bin.
-- ML Kit Language ID + on-device Translation.
-- Supertonic native motoru çeviri ve önizleme akışından çıkarıldı.
-- Önizleme: Android TextToSpeech, Türkçe.
-- Amaç: önce çevirinin kesin çalışmasını doğrulamak; hız optimizasyonu sonraki sürüm.
+## Neden streaming?
+v0.x sürümlerinde 1–4 saniyelik WAV parçaları Whisper'a ayrı ayrı gönderiliyordu. Bu hem gecikme hem de kısa parçaların yanlış tanınması sorununa yol açtı.
 
+v1.0 tek bir sherpa-onnx OnlineStream kullanıyor. OnlineRecognizer ses geldikçe decode edebiliyor ve partial sonuç döndürüyor.
 
-v0.10.0 ÇEVİRİ STABİLİZASYONU
-- İngilizce→Türkçe ML Kit modeli AI hazırlık aşamasında önceden hazırlanır.
-- Her cümlede downloadModelIfNeeded çağrısı yapılmaz; Translator bellekte tutulur.
-- Model indirme 60 saniye, çeviri 15 saniye timeout ile sınırlıdır; sonsuz “Türkçeye çevriliyor…” beklemesi engellenir.
-- Önceki ses→Whisper hattına dokunulmamıştır.
+## Model
+İlk deney için küçük İngilizce `sherpa-onnx-streaming-zipformer-en-20M-2023-02-17` seçildi. Resmi sherpa belgeleri bu modeli küçük ve yalnızca İngilizce olarak tanımlıyor. Bu nedenle v1.0 kaynak dili İngilizce ile sınırlandırıldı.
+
+## Ses kaynakları
+- Mikrofon: 16 kHz mono, 100 ms PCM chunks.
+- Telefon sesi: Android AudioPlaybackCapture ile 48 kHz mono, 100 ms chunks; sherpa girdisi gerektiğinde kendi resampling yolunu kullanır.
+- Her iki kaynak aynı `StreamingHub` üzerinden aynı ASR stream'ine gider.
+
+## Çeviri
+Partial İngilizce metin yaklaşık 650 ms aralıklarla ML Kit EN→TR'ye gönderilir. Sonuç değiştikçe Türkçe alanı güncellenir. Endpoint oluşunca son çeviri hemen yapılır.
+
+## Sınırlar
+Android playback capture kaynak uygulamanın capture politikasına ve MediaProjection iznine bağlıdır. Bazı uygulamalar/DRM içerikler yakalanamaz.

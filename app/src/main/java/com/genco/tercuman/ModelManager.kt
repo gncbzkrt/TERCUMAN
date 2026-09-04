@@ -17,6 +17,10 @@ class ModelManager(private val context: Context) {
         const val WHISPER_NAME = "ggml-base.bin"
         const val WHISPER_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin?download=true"
 
+        const val STREAM_DIR = "sherpa-onnx-streaming-zipformer-en-20M-2023-02-17"
+        const val STREAM_ARCHIVE = "$STREAM_DIR.tar.bz2"
+        const val STREAM_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/$STREAM_ARCHIVE"
+
         const val SUPER_DIR = "sherpa-onnx-supertonic-3-tts-int8-2026-05-11"
         const val SUPER_ARCHIVE = "$SUPER_DIR.tar.bz2"
         const val SUPER_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/$SUPER_ARCHIVE"
@@ -24,13 +28,27 @@ class ModelManager(private val context: Context) {
 
     val modelRoot: File get() = File(context.filesDir, "models").apply { mkdirs() }
     val whisperFile: File get() = File(modelRoot, WHISPER_NAME)
+    val streamingDir: File get() = File(modelRoot, STREAM_DIR)
     val supertonicDir: File get() = File(modelRoot, SUPER_DIR)
 
     fun whisperReady(): Boolean = whisperFile.exists() && whisperFile.length() > 100_000_000
+    fun streamingReady(): Boolean = listOf(
+        "encoder-epoch-99-avg-1.int8.onnx", "decoder-epoch-99-avg-1.onnx",
+        "joiner-epoch-99-avg-1.int8.onnx", "tokens.txt"
+    ).all { File(streamingDir, it).exists() && File(streamingDir, it).length() > 0 }
     fun supertonicReady(): Boolean = listOf(
         "duration_predictor.int8.onnx", "text_encoder.int8.onnx", "vector_estimator.int8.onnx",
         "vocoder.int8.onnx", "tts.json", "unicode_indexer.bin", "voice.bin"
     ).all { File(supertonicDir, it).exists() }
+
+    suspend fun ensureStreamingEnglish(onProgress: (Int) -> Unit) = withContext(Dispatchers.IO) {
+        if (streamingReady()) return@withContext
+        val archive = File(modelRoot, STREAM_ARCHIVE)
+        download(STREAM_URL, archive, onProgress)
+        extractTarBz2(archive, modelRoot)
+        archive.delete()
+        check(streamingReady()) { "Streaming İngilizce modeli açılamadı." }
+    }
 
     suspend fun ensureWhisper(onProgress: (Int) -> Unit) = withContext(Dispatchers.IO) {
         if (whisperReady()) return@withContext

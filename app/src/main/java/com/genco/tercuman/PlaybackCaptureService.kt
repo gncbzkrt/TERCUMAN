@@ -86,21 +86,11 @@ class PlaybackCaptureService : Service() {
         recorder = record
         record.startRecording()
         thread(name = "tercuman-playback") {
-            val chunkSamples = sampleRate * 4
-            val buf = ShortArray(4096)
-            val collected = ArrayList<Short>(chunkSamples)
+            val buf = ShortArray(4800) // 100 ms @ 48 kHz
             try {
                 while (running.get()) {
                     val n = record.read(buf, 0, buf.size)
-                    if (n <= 0) continue
-                    for (i in 0 until n) collected.add(buf[i])
-                    if (collected.size >= chunkSamples) {
-                        val pcm = ShortArray(collected.size) { collected[it] }
-                        collected.clear()
-                        val f = File(cacheDir, "phone_${System.currentTimeMillis()}.wav")
-                        WavUtils.writePcm16Mono(f, pcm, sampleRate)
-                        sendBroadcast(Intent(ACTION_CHUNK).setPackage(packageName).putExtra(EXTRA_PATH, f.absolutePath))
-                    }
+                    if (n > 0) StreamingHub.emit(buf.copyOf(n), sampleRate)
                 }
             } finally {
                 runCatching { record.stop() }
