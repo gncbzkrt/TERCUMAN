@@ -13,3 +13,9 @@ Bu sürüm, v0.x dosya tabanlı Whisper zincirinden ayrılarak sherpa-onnx Onlin
 - Android playback capture yalnızca kaynak uygulama yakalamaya izin veriyorsa çalışır.
 
 Bu ilk streaming deneyidir; çok dilli ASR, kayan pencere ve iki yönlü konuşma sonraki aşamadır.
+
+
+## v1.0.2
+- Fixed streaming microphone callback type mismatch.
+- Fixed streaming engine fallback Pair return types.
+- Fixed endpoint state being checked after reset.
