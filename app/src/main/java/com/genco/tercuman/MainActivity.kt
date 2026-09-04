@@ -32,6 +32,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var translator: TranslationEngine
     private lateinit var micChunker: MicrophoneChunker
     private lateinit var diarization: SpeakerDiarizationEngine
+    private lateinit var aiCore: AIConversationEngine
     private var previewTts: TextToSpeech? = null
     private var ttsReady = false
 
@@ -47,6 +48,8 @@ class MainActivity : AppCompatActivity() {
     private var micOn = false
     private var phoneOn = false
     private var ready = false
+    private var aiPendingEnglish = ""
+    private val aiPendingLock = Any()
     private var lastEnglish = ""
     private var sentenceSequence = 0L
     private var latestSentenceId = 0L
@@ -79,6 +82,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         modelManager = ModelManager(this)
         diarization = SpeakerDiarizationEngine(this, modelManager.modelRoot)
+        aiCore = AIConversationEngine(this, modelManager.aiModelFile)
         translator = TranslationEngine()
         streaming = StreamingEnglishEngine(modelManager.streamingDir)
         micChunker = MicrophoneChunker(this) { pcm, rate -> StreamingHub.emit(pcm, rate) }
@@ -267,9 +271,14 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             modelButton.isEnabled = false
             try {
-                status.text = "Gerçek streaming İngilizce modeli indiriliyor…"
-            status.text = "Konuşmacı modeli hazırlanıyor…"
-            modelManager.ensureDiarization { p ->
+                status.text = "Yerel AI Conversation modeli hazırlanıyor…"
+                modelManager.ensureAiCore { p ->
+                    runOnUiThread { status.text = "Yerel AI modeli indiriliyor… $p%" }
+                }
+                aiCore.start()
+
+                status.text = "Konuşmacı modeli hazırlanıyor…"
+                modelManager.ensureDiarization { p ->
                 runOnUiThread { status.text = "Konuşmacı modeli indiriliyor… $p%" }
             }
             diarization.start()
@@ -278,7 +287,7 @@ class MainActivity : AppCompatActivity() {
                 translator.prepareEnglishTurkish { msg -> runOnUiThread { status.text = msg } }
                 streaming.start()
                 ready = true
-                status.text = "AI HAZIR ✓ • GERÇEK STREAMING ✓ • EN → TR ✓"
+                status.text = "AI CORE ✓ • GERÇEK STREAMING ✓ • EN → TR ✓"
                 modelButton.text = "AI HAZIR ✓"
             } catch (e: Exception) {
                 ready = false
@@ -379,66 +388,94 @@ class MainActivity : AppCompatActivity() {
             /*
              * ENDPOINT:
              *
-             * Only a completed/stable sentence reaches translation.
+             * A pause is only a trigger for the local AI.
+             * The AI decides whether the meaning unit is complete.
              */
-            val stableEnglish = partial
+            val candidate = partial
                 .replace(Regex("\\s+"), " ")
                 .trim()
 
-            if (
-                stableEnglish.isBlank() ||
-                stableEnglish == lastCommittedEnglish
-            ) {
-                return
+            if (candidate.isBlank()) return
+
+            val combinedCandidate = synchronized(aiPendingLock) {
+                listOf(aiPendingEnglish, candidate)
+                    .filter { it.isNotBlank() }
+                    .joinToString(" ")
             }
 
-            lastCommittedEnglish = stableEnglish
+            synchronized(aiPendingLock) {
+                aiPendingEnglish = combinedCandidate
+            }
 
-            val sentenceId = ++latestSentenceId
+            val decisionInput = combinedCandidate
 
-            lastPartialShown = ""
-            lastPartialShownAt = 0L
-
-            /*
-             * Do NOT run currentSpeaker() here.
-             *
-             * It is an offline diarization operation and can be
-             * considerably heavier than streaming ASR.
-             *
-             * It is launched independently below.
-             */
             withContext(Dispatchers.Main) {
-                status.text = "🟡 Cümle tamamlandı • Çeviriliyor..."
+                status.text = "🧠 AI konuşma yapısını analiz ediyor…"
             }
 
-            scheduleFinalTranslation(
-                text = stableEnglish,
-                sentenceId = sentenceId
-            )
-
-            /*
-             * Speaker analysis runs independently.
-             * It can no longer block the incoming audio/ASR chain.
-             *
-             * The current speaker result is used to update the
-             * conversation label when available.
-             */
             lifecycleScope.launch(Dispatchers.Default) {
                 try {
-                    val speaker = diarization.currentSpeaker()
+                    val decision = aiCore.decide(
+                        candidate = decisionInput,
+                        previousPending = ""
+                    )
 
-                    withContext(Dispatchers.Main) {
-                        /*
-                         * Speaker result is intentionally handled
-                         * separately from ASR/translation timing.
-                         */
-                        updateLatestSpeakerLabel(
-                            sentenceId = sentenceId,
-                            speaker = speaker
-                        )
+                    when (decision.action) {
+                        AIConversationEngine.Action.WAIT -> {
+                            synchronized(aiPendingLock) {
+                                aiPendingEnglish = decisionInput
+                            }
+                            withContext(Dispatchers.Main) {
+                                status.text = "🟢 Konuşma devam ediyor…"
+                                sourceText.text = "ORİJİNAL • CANLI\n\n$decisionInput"
+                            }
+                        }
+
+                        AIConversationEngine.Action.COMMIT -> {
+                            val stableEnglish = decision.sentence
+                                .replace(Regex("\\s+"), " ")
+                                .trim()
+
+                            if (stableEnglish.isBlank()) return@launch
+
+                            synchronized(aiPendingLock) {
+                                aiPendingEnglish = ""
+                            }
+
+                            val sentenceId = ++latestSentenceId
+
+                            lastCommittedEnglish = stableEnglish
+                            lastPartialShown = ""
+                            lastPartialShownAt = 0L
+
+                            withContext(Dispatchers.Main) {
+                                status.text = "🟡 AI cümleyi tamamladı • Çeviriliyor…"
+                            }
+
+                            scheduleFinalTranslation(
+                                text = stableEnglish,
+                                sentenceId = sentenceId
+                            )
+
+                            lifecycleScope.launch(Dispatchers.Default) {
+                                try {
+                                    val speaker = diarization.currentSpeaker()
+                                    withContext(Dispatchers.Main) {
+                                        updateLatestSpeakerLabel(
+                                            sentenceId = sentenceId,
+                                            speaker = speaker
+                                        )
+                                    }
+                                } catch (_: Exception) {
+                                    // Speaker analysis never interrupts translation.
+                                }
+                            }
+                        }
                     }
-                } catch (_: Exception) {
-                    // Speaker analysis must never interrupt translation.
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        status.text = "🟠 AI analiz hatası • yerel fallback"
+                    }
                 }
             }
 
@@ -584,6 +621,7 @@ class MainActivity : AppCompatActivity() {
         diarization.release()
         previewTts?.stop(); previewTts?.shutdown(); previewTts = null
         translator.close()
+        aiCore.close()
         super.onDestroy()
     }
 }

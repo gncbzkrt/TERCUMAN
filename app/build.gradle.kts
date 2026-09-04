@@ -15,8 +15,8 @@ android {
         applicationId = "com.genco.tercuman"
         minSdk = 29
         targetSdk = 35
-        versionCode = 22
-        versionName = "1.2.0"
+        versionCode = 23
+        versionName = "1.3.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -76,6 +76,9 @@ dependencies {
 
     implementation("com.google.mlkit:language-id:17.0.6")
     implementation("com.google.mlkit:translate:17.0.3")
+
+    // Yerel AI Conversation Engine (Qwen3-0.6B INT4 / LiteRT-LM).
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.16.1")
 
     // Ücretsiz, cihaz-içi Whisper.cpp AAR. Streaming yerine kısa WAV parçaları işlenir.
     implementation("dev.ffmpegkit-maintained:whisper-android:1.0.0")

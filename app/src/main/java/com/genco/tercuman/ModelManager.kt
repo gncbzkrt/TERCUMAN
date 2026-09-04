@@ -11,6 +11,7 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 
 class ModelManager(private val context: Context) {
     companion object {
@@ -24,6 +25,11 @@ class ModelManager(private val context: Context) {
         const val SUPER_DIR = "sherpa-onnx-supertonic-3-tts-int8-2026-05-11"
         const val SUPER_ARCHIVE = "$SUPER_DIR.tar.bz2"
         const val SUPER_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/$SUPER_ARCHIVE"
+        const val AI_DIR = "ai"
+        const val AI_MODEL_NAME = "qwen3_0.6b_nothink_q4_block32_ekv1280.litertlm"
+        const val AI_MODEL_URL = "https://huggingface.co/litert-community/Qwen3-0.6B-int4/resolve/main/$AI_MODEL_NAME?download=true"
+        const val AI_MODEL_SHA256 = "2df6821ec12702dafd33915e7a1a1adc7c4b053f3672fd9555dfaf3a114c4139"
+
         const val DIARIZATION_DIR = "sherpa-onnx-pyannote-segmentation-3-0"
         const val DIARIZATION_ARCHIVE = "$DIARIZATION_DIR.tar.bz2"
         const val DIARIZATION_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/$DIARIZATION_ARCHIVE"
@@ -35,6 +41,8 @@ class ModelManager(private val context: Context) {
     val whisperFile: File get() = File(modelRoot, WHISPER_NAME)
     val streamingDir: File get() = File(modelRoot, STREAM_DIR)
     val supertonicDir: File get() = File(modelRoot, SUPER_DIR)
+    val aiDir: File get() = File(modelRoot, AI_DIR)
+    val aiModelFile: File get() = File(aiDir, AI_MODEL_NAME)
     val diarizationDir: File get() = File(modelRoot, DIARIZATION_DIR)
     val speakerEmbeddingFile: File get() = File(modelRoot, SPEAKER_EMBEDDING_NAME)
 
@@ -43,6 +51,9 @@ class ModelManager(private val context: Context) {
         "encoder-epoch-99-avg-1.int8.onnx", "decoder-epoch-99-avg-1.onnx",
         "joiner-epoch-99-avg-1.int8.onnx", "tokens.txt"
     ).all { File(streamingDir, it).exists() && File(streamingDir, it).length() > 0 }
+    fun aiReady(): Boolean =
+        aiModelFile.exists() && aiModelFile.length() > 300_000_000
+
     fun diarizationReady(): Boolean =
         File(diarizationDir, "model.onnx").exists() &&
         File(diarizationDir, "model.onnx").length() > 0 &&
@@ -53,6 +64,17 @@ class ModelManager(private val context: Context) {
         "duration_predictor.int8.onnx", "text_encoder.int8.onnx", "vector_estimator.int8.onnx",
         "vocoder.int8.onnx", "tts.json", "unicode_indexer.bin", "voice.bin"
     ).all { File(supertonicDir, it).exists() }
+
+    suspend fun ensureAiCore(onProgress: (Int) -> Unit) = withContext(Dispatchers.IO) {
+        if (aiReady()) return@withContext
+        aiDir.mkdirs()
+        download(AI_MODEL_URL, aiModelFile, onProgress)
+        check(aiReady()) { "AI Conversation modeli açılamadı." }
+        check(sha256(aiModelFile).equals(AI_MODEL_SHA256, ignoreCase = true)) {
+            aiModelFile.delete()
+            "AI Conversation modeli doğrulanamadı."
+        }
+    }
 
     suspend fun ensureStreamingEnglish(onProgress: (Int) -> Unit) = withContext(Dispatchers.IO) {
         if (streamingReady()) return@withContext
@@ -85,6 +107,19 @@ class ModelManager(private val context: Context) {
         extractTarBz2(archive, modelRoot)
         archive.delete()
         check(supertonicReady()) { "Supertonic modeli açılamadı." }
+    }
+
+    private fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        FileInputStream(file).use { input ->
+            val buffer = ByteArray(1024 * 128)
+            while (true) {
+                val n = input.read(buffer)
+                if (n <= 0) break
+                digest.update(buffer, 0, n)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     private fun download(urlText: String, dest: File, onProgress: (Int) -> Unit) {
