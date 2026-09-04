@@ -17,8 +17,8 @@ android {
         applicationId = "com.genco.tercuman"
         minSdk = 29
         targetSdk = 35
-        versionCode = 23
-        versionName = "1.3.0"
+        versionCode = 25
+        versionName = "1.3.2"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -56,13 +56,16 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    compilerOptions {
-        jvmTarget = JvmTarget.JVM_17
-    }
 
     packaging {
         resources.excludes += setOf("META-INF/AL2.0", "META-INF/LGPL2.1")
         jniLibs.useLegacyPackaging = false
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_17)
     }
 }
 
