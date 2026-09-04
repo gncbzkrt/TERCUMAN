@@ -1,4 +1,4 @@
-# TERCÜMAN v1.0.0 — Streaming deney sürümü
+# TERCÜMAN v1.0.1.1 — Streaming deney sürümü
 
 Bu sürüm, v0.x dosya tabanlı Whisper zincirinden ayrılarak sherpa-onnx OnlineRecognizer ile gerçek incremental/streaming ASR dener. Ses 100 ms PCM parçaları halinde tek bir OnlineStream'e beslenir; parçalar ayrı ayrı tanınmaz.
 

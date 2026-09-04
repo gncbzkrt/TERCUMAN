@@ -1,12 +1,12 @@
-# TERCÜMAN v1.0.0 teknik notları
+# TERCÜMAN v1.0.1.1 teknik notları
 
 ## Neden streaming?
 v0.x sürümlerinde 1–4 saniyelik WAV parçaları Whisper'a ayrı ayrı gönderiliyordu. Bu hem gecikme hem de kısa parçaların yanlış tanınması sorununa yol açtı.
 
-v1.0 tek bir sherpa-onnx OnlineStream kullanıyor. OnlineRecognizer ses geldikçe decode edebiliyor ve partial sonuç döndürüyor.
+v1.0.1 tek bir sherpa-onnx OnlineStream kullanıyor. OnlineRecognizer ses geldikçe decode edebiliyor ve partial sonuç döndürüyor.
 
 ## Model
-İlk deney için küçük İngilizce `sherpa-onnx-streaming-zipformer-en-20M-2023-02-17` seçildi. Resmi sherpa belgeleri bu modeli küçük ve yalnızca İngilizce olarak tanımlıyor. Bu nedenle v1.0 kaynak dili İngilizce ile sınırlandırıldı.
+İlk deney için küçük İngilizce `sherpa-onnx-streaming-zipformer-en-20M-2023-02-17` seçildi. Resmi sherpa belgeleri bu modeli küçük ve yalnızca İngilizce olarak tanımlıyor. Bu nedenle v1.0.1 kaynak dili İngilizce ile sınırlandırıldı.
 
 ## Ses kaynakları
 - Mikrofon: 16 kHz mono, 100 ms PCM chunks.

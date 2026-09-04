@@ -50,10 +50,10 @@ class StreamingEnglishEngine(private val context: Context, private val modelDir:
 
     /** Returns current partial/final English text after accepting a PCM chunk. */
     @Synchronized
-    fun acceptPcm16(pcm: ShortArray, sampleRate: Int): String {
+    fun acceptPcm16(pcm: ShortArray, sampleRate: Int): Pair<String, Boolean> {
         val r = recognizer ?: return ""
         val s = stream ?: return ""
-        if (pcm.isEmpty()) return ""
+        if (pcm.isEmpty()) return "" to false
         val floats = FloatArray(pcm.size) { pcm[it] / 32768.0f }
         s.acceptWaveform(floats, sampleRate)
         while (r.isReady(s)) r.decode(s)
@@ -63,7 +63,7 @@ class StreamingEnglishEngine(private val context: Context, private val modelDir:
             // Finalize this utterance and immediately create a fresh stream.
             r.reset(s)
         }
-        return text
+        return text to r.isEndpoint(s)
     }
 
     @Synchronized fun stop() {
