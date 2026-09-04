@@ -95,7 +95,7 @@ class MainActivity : AppCompatActivity() {
         val root = ScrollView(this).apply { setBackgroundColor(Color.rgb(12, 27, 51)); isFillViewport = true }
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(14), dp(16), dp(20)) }
         col.addView(text("TERCÜMAN", 28f).apply { setTypeface(typeface, android.graphics.Typeface.BOLD) })
-        col.addView(text("v1.0.6 • gerçek streaming ASR • cihaz içi", 13f, Color.rgb(170,184,197)))
+        col.addView(text("v1.0.7 • gerçek streaming ASR • cihaz içi", 13f, Color.rgb(170,184,197)))
         status = text("Hazırlanıyor…", 14f, Color.rgb(85,214,190)); col.addView(status)
 
         modelButton = MaterialButton(this).apply { text = "STREAMING AI'YI HAZIRLA"; setOnClickListener { downloadModels() } }
@@ -118,7 +118,7 @@ class MainActivity : AppCompatActivity() {
 
         col.addView(card("ORİJİNAL • İNGİLİZCE • CANLI", "Konuşma burada anlık görünecek." ).also { sourceText = it.getChildAt(0) as TextView }, lp())
         col.addView(card("TÜRKÇE • STABİL ÇEVİRİ", "Cümle tamamlandığında temiz çeviri burada kalır." ).also { translatedText = it.getChildAt(0) as TextView }, lp())
-        col.addView(text("v1.0.6: Streaming hızını korur; aktif cümlenin çevirisini önceki çevirilerden ayırır ve geciken sonuçların yeni cümlenin üzerine yazılmasını engeller.", 12f, Color.rgb(170,184,197)))
+        col.addView(text("v1.0.7: Streaming hızını korur; aktif cümlenin çevirisini önceki çevirilerden ayırır ve geciken sonuçların yeni cümlenin üzerine yazılmasını engeller.", 12f, Color.rgb(170,184,197)))
         col.addView(text("Telefon sesi Android AudioPlaybackCapture izinleriyle alınır; kaynak uygulama yakalamayı engellerse ses gelmeyebilir.", 12f, Color.rgb(170,184,197)))
         root.addView(col)
         return root
@@ -218,7 +218,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            if (endpoint) {
+            if (endpoint && !SentenceStabilizer.looksIncomplete(partial)) {
                 val id = ++sentenceSequence
                 latestSentenceId = id
                 withContext(Dispatchers.Main) {

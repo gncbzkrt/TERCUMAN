@@ -20,6 +20,7 @@ import java.io.File
 class StreamingEnglishEngine(private val context: Context, private val modelDir: File) {
     private var recognizer: OnlineRecognizer? = null
     private var stream: OnlineStream? = null
+    private var pendingPrefix = ""
 
     fun start() {
         stop()
@@ -37,8 +38,8 @@ class StreamingEnglishEngine(private val context: Context, private val modelDir:
                 modelType = "zipformer",
             ),
             endpointConfig = EndpointConfig(
-                rule1 = EndpointRule(false, 0.9f, 0.0f),
-                rule2 = EndpointRule(true, 0.7f, 0.0f),
+                rule1 = EndpointRule(false, 1.2f, 0.0f),
+                rule2 = EndpointRule(true, 1.0f, 0.0f),
                 rule3 = EndpointRule(false, 0.0f, 20.0f),
             ),
             enableEndpoint = true,
@@ -59,16 +60,26 @@ class StreamingEnglishEngine(private val context: Context, private val modelDir:
         s.acceptWaveform(floats, sampleRate)
         while (r.isReady(s)) r.decode(s)
         val result = r.getResult(s)
-        val text = result.text.trim()
+        val rawText = result.text.trim()
+        val combined = if (pendingPrefix.isBlank()) rawText else listOf(pendingPrefix, rawText).filter { it.isNotBlank() }.joinToString(" ")
         val endpoint = r.isEndpoint(s)
         if (endpoint) {
-            // Finalize this utterance and immediately create a fresh stream.
+            // If the recognizer stopped on a fragment such as "that must be very",
+            // keep it locally and attach the next streaming segment before translation.
+            if (SentenceStabilizer.looksIncomplete(combined)) {
+                pendingPrefix = combined
+                r.reset(s)
+                return combined to false
+            }
+            pendingPrefix = ""
             r.reset(s)
+            return combined to true
         }
-        return text to endpoint
+        return combined to false
     }
 
     @Synchronized fun stop() {
+        pendingPrefix = ""
         stream?.release()
         stream = null
         recognizer?.release()
