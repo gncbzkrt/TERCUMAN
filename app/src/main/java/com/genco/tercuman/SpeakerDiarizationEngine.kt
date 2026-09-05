@@ -25,13 +25,17 @@ class SpeakerDiarizationEngine(
 ) {
     companion object {
         private const val SAMPLE_RATE = 16000
-        private const val MAX_SECONDS = 20
+        private const val MAX_SECONDS = 10
         private const val MIN_SECONDS = 0.9
     }
 
     private var diarizer: OfflineSpeakerDiarization? = null
 
-    private val pcmBuffer = ArrayList<Float>(SAMPLE_RATE * MAX_SECONDS)
+    // Fixed-size circular buffer: avoids O(n) removeAt(0) shifting on every chunk.
+    private val maxSamples = SAMPLE_RATE * MAX_SECONDS
+    private val pcmBuffer = FloatArray(maxSamples)
+    private var pcmWriteIndex = 0
+    private var pcmSize = 0
     private var bufferStartSeconds = 0.0
     private var totalSeconds = 0.0
 
@@ -100,20 +104,13 @@ class SpeakerDiarizationEngine(
         val samples = resampleTo16k(pcm, sampleRate)
 
         for (sample in samples) {
-            pcmBuffer.add(sample)
+            pcmBuffer[pcmWriteIndex] = sample
+            pcmWriteIndex = (pcmWriteIndex + 1) % maxSamples
+            if (pcmSize < maxSamples) pcmSize++
         }
 
         totalSeconds += pcm.size.toDouble() / max(sampleRate, 1)
-
-        val maxSamples = SAMPLE_RATE * MAX_SECONDS
-        if (pcmBuffer.size > maxSamples) {
-            val removeCount = pcmBuffer.size - maxSamples
-            repeat(removeCount) {
-                pcmBuffer.removeAt(0)
-            }
-            bufferStartSeconds =
-                totalSeconds - pcmBuffer.size.toDouble() / SAMPLE_RATE
-        }
+        bufferStartSeconds = totalSeconds - pcmSize.toDouble() / SAMPLE_RATE
     }
 
     /**
@@ -139,14 +136,14 @@ class SpeakerDiarizationEngine(
          * No heavy ML work is allowed inside this synchronized block.
          */
         synchronized(this) {
-            if (pcmBuffer.size < (SAMPLE_RATE * MIN_SECONDS).toInt()) {
+            if (pcmSize < (SAMPLE_RATE * MIN_SECONDS).toInt()) {
                 return previousSpeaker
             }
 
-            samples = FloatArray(pcmBuffer.size)
-
-            for (i in pcmBuffer.indices) {
-                samples[i] = pcmBuffer[i]
+            samples = FloatArray(pcmSize)
+            val start = if (pcmSize == maxSamples) pcmWriteIndex else 0
+            for (i in 0 until pcmSize) {
+                samples[i] = pcmBuffer[(start + i) % maxSamples]
             }
 
             snapshotStartSeconds = bufferStartSeconds
@@ -310,7 +307,8 @@ class SpeakerDiarizationEngine(
 
     @Synchronized
     fun reset() {
-        pcmBuffer.clear()
+        pcmWriteIndex = 0
+        pcmSize = 0
         bufferStartSeconds = 0.0
         totalSeconds = 0.0
         previousSegments = emptyList()

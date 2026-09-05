@@ -29,7 +29,7 @@ import kotlinx.coroutines.withContext
 import java.util.Locale
 
 /**
- * TERCÜMAN v1.4.1
+ * TERCÜMAN v1.5.0
  *
  * Main-screen philosophy:
  * - Fixed application boundary/header.
@@ -71,6 +71,7 @@ class MainActivity : AppCompatActivity() {
     private val audioMutex = kotlinx.coroutines.sync.Mutex()
     private var translationTextSize = 20f
     private var pendingSentenceId: Long? = null
+    private var conversationGeneration = 0L
 
     /** Future-proof turn model: source/target are not hard-coded in the UI. */
     private data class ConversationTurn(
@@ -578,6 +579,7 @@ class MainActivity : AppCompatActivity() {
             scheduleTranslation(combined, sentenceId)
 
             // AI sentence-boundary analysis is intentionally independent as well.
+            val generation = conversationGeneration
             lifecycleScope.launch(Dispatchers.Default) {
                 try {
                     val decision = aiCore.decide(
@@ -585,6 +587,7 @@ class MainActivity : AppCompatActivity() {
                         previousPending = pendingBefore
                     )
 
+                    if (generation != conversationGeneration) return@launch
                     when (decision.action) {
                         AIConversationEngine.Action.WAIT -> {
                             synchronized(aiPendingLock) { aiPendingEnglish = combined }
@@ -609,6 +612,7 @@ class MainActivity : AppCompatActivity() {
                             }
 
                             lifecycleScope.launch(Dispatchers.Default) {
+                                if (generation != conversationGeneration) return@launch
                                 runCatching {
                                     val speaker = diarization.currentSpeaker()
                                     withContext(Dispatchers.Main) {
@@ -633,12 +637,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun scheduleTranslation(text: String, sentenceId: Long) {
         val revision = conversationTurns[sentenceId]?.translationRevision ?: return
+        val generation = conversationGeneration
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val translated = translator.translateEnglishToTurkish(text).trim()
                 if (translated.isBlank()) return@launch
 
                 withContext(Dispatchers.Main) {
+                    if (generation != conversationGeneration) return@withContext
                     val turn = conversationTurns[sentenceId] ?: return@withContext
                     // Ignore an older translation that finished after an AI merge/correction.
                     if (turn.translationRevision != revision || turn.original != text) return@withContext
@@ -717,6 +723,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun clearConversation() {
+        conversationGeneration++
+        previewTts?.stop()
         synchronized(aiPendingLock) { aiPendingEnglish = "" }
         pendingSentenceId = null
         latestSentenceId = 0L

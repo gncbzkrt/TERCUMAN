@@ -6,6 +6,8 @@ import com.google.mlkit.nl.translate.Translation
 import com.google.mlkit.nl.translate.Translator
 import com.google.mlkit.nl.translate.TranslatorOptions
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 
 /**
@@ -21,6 +23,7 @@ class TranslationEngine {
     private val languageId = LanguageIdentification.getClient()
     private val translators = mutableMapOf<String, Translator>()
     private val preparedRoutes = mutableSetOf<String>()
+    private val routeLocks = mutableMapOf<String, Mutex>()
 
     suspend fun prepareEnglishTurkish(onStatus: (String) -> Unit = {}) {
         ensureRouteModel("en", "tr", onStatus)
@@ -97,12 +100,15 @@ class TranslationEngine {
         val translator = synchronized(translators) {
             translators.getOrPut(key) { createTranslator(sourceTag, targetTag) }
         }
-        val alreadyPrepared = synchronized(preparedRoutes) { preparedRoutes.contains(key) }
-        if (alreadyPrepared) return
+        val lock = synchronized(routeLocks) { routeLocks.getOrPut(key) { Mutex() } }
+        lock.withLock {
+            val alreadyPrepared = synchronized(preparedRoutes) { preparedRoutes.contains(key) }
+            if (alreadyPrepared) return@withLock
 
-        onStatus("Çeviri modeli hazırlanıyor…")
-        withTimeout(60_000L) { translator.downloadModelIfNeeded().await() }
-        synchronized(preparedRoutes) { preparedRoutes.add(key) }
+            onStatus("Çeviri modeli hazırlanıyor…")
+            withTimeout(60_000L) { translator.downloadModelIfNeeded().await() }
+            synchronized(preparedRoutes) { preparedRoutes.add(key) }
+        }
     }
 
     private fun createTranslator(sourceTag: String, targetTag: String = "tr"): Translator {
@@ -119,6 +125,7 @@ class TranslationEngine {
         translators.values.forEach { runCatching { it.close() } }
         translators.clear()
         synchronized(preparedRoutes) { preparedRoutes.clear() }
+        synchronized(routeLocks) { routeLocks.clear() }
         languageId.close()
     }
 }

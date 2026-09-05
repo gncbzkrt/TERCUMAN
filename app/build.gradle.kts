@@ -17,8 +17,8 @@ android {
         applicationId = "com.genco.tercuman"
         minSdk = 29
         targetSdk = 35
-        versionCode = 27
-        versionName = "1.4.1"
+        versionCode = 28
+        versionName = "1.5.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
