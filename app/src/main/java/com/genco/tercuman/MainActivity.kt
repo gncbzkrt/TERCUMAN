@@ -29,7 +29,7 @@ import kotlinx.coroutines.withContext
 import java.util.Locale
 
 /**
- * TERCÜMAN v1.6.1
+ * TERCÜMAN v1.7.0
  *
  * Main-screen philosophy:
  * - Fixed application boundary/header.
@@ -46,7 +46,9 @@ import java.util.Locale
  */
 class MainActivity : AppCompatActivity() {
     private lateinit var modelManager: ModelManager
-    private lateinit var streaming: StreamingEnglishEngine
+    private lateinit var streaming: StreamingMultilingualEngine
+    private lateinit var englishFallbackStreaming: StreamingEnglishEngine
+    private var multilingualStreamingActive = false
     private lateinit var translator: TranslationEngine
     private lateinit var micChunker: MicrophoneChunker
     private lateinit var diarization: SpeakerDiarizationEngine
@@ -60,11 +62,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var translationScroll: ScrollView
     private lateinit var translationHistoryContainer: LinearLayout
     private lateinit var menuButton: MaterialButton
+    private lateinit var aiStatusText: TextView
 
     private var micOn = false
     private var phoneOn = false
     private var ready = false
     private var aiPreparing = false
+    private var aiStatus = "AI hazırlanıyor…"
+    private var peerLanguage: String? = null
     private var aiPendingEnglish = ""
     private val aiPendingLock = Any()
     private var latestSentenceId = 0L
@@ -112,7 +117,8 @@ class MainActivity : AppCompatActivity() {
         diarization = SpeakerDiarizationEngine(this, modelManager.modelRoot)
         aiCore = AIConversationEngine(this, modelManager.aiModelFile)
         translator = TranslationEngine()
-        streaming = StreamingEnglishEngine(modelManager.streamingDir)
+        streaming = StreamingMultilingualEngine(modelManager.multilingualStreamingDir)
+        englishFallbackStreaming = StreamingEnglishEngine(modelManager.streamingDir)
         micChunker = MicrophoneChunker(this) { pcm, rate ->
             StreamingHub.emit(pcm, rate)
         }
@@ -138,6 +144,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         updateMenuState()
+        setAiStatus("AI hazırlanıyor…")
+        lifecycleScope.launch {
+            prepareModels()
+        }
     }
 
     private fun initPreviewTts() {
@@ -193,6 +203,13 @@ class MainActivity : AppCompatActivity() {
             },
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         )
+
+        aiStatusText = text("AI hazırlanıyor…", 11f, Color.rgb(170, 230, 215)).apply {
+            gravity = Gravity.CENTER
+            maxLines = 2
+            setPadding(dp(4), 0, dp(4), 0)
+        }
+        header.addView(aiStatusText, LinearLayout.LayoutParams(dp(128), dp(44)))
 
         menuButton = MaterialButton(this).apply {
             text = "☰"
@@ -317,11 +334,11 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        val ai = menuButton(if (ready) "🤖 AI HAZIR ✓" else "🤖 AI HAZIRLA") {
-            if (!ready) downloadModels()
+        val ai = menuButton(if (ready) "🤖 AI HAZIR ✓" else "🤖 AI'yi YENİDEN HAZIRLA") {
+            prepareModels()
             popup?.dismiss()
         }
-        ai.isEnabled = !aiPreparing
+        ai.isEnabled = !aiPreparing || ready
         panel.addView(ai, LinearLayout.LayoutParams(dp(230), dp(46)).apply { bottomMargin = dp(3) })
 
         val mic = menuButton(if (micOn) "⏹ DIŞ SESİ DURDUR" else "🎤 DIŞ SES") {
@@ -376,7 +393,7 @@ class MainActivity : AppCompatActivity() {
         panel.addView(sizeRow)
 
         val languageInfo = text(
-            "🌐 Dil: OTOMATİK • çift yönlü mimari hazır\nİlk akış: İngilizce → Türkçe",
+            "🌐 Dil: OTOMATİK • ÇİFT YÖNLÜ\nTürkçe ↔ karşı taraf dili",
             11f,
             Color.rgb(170, 184, 197)
         ).apply {
@@ -419,6 +436,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         previewTts?.setSpeechRate(0.98f)
+        previewTts?.setLanguage(Locale("tr", "TR"))
         previewTts?.speak(
             "Merhaba. Ben Tercüman. Yabancı konuşmaları Türkçeye çevirmeye hazırım.",
             TextToSpeech.QUEUE_FLUSH,
@@ -427,30 +445,58 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    private fun downloadModels() {
+    private fun prepareModels() {
         if (aiPreparing) return
         aiPreparing = true
+        ready = false
+        setAiStatus("AI hazırlanıyor…")
         updateMenuState()
 
-        // Model initialization is deliberately off the main thread.
         lifecycleScope.launch(Dispatchers.Default) {
             try {
-                modelManager.ensureAiCore { _ -> }
+                setAiStatus("AI modeli yükleniyor…")
+                modelManager.ensureAiCore { progress ->
+                    setAiStatus("AI modeli hazırlanıyor %$progress…")
+                }
                 aiCore.start()
 
-                modelManager.ensureDiarization { _ -> }
+                setAiStatus("Konuşmacı modeli hazırlanıyor…")
+                modelManager.ensureDiarization { progress ->
+                    setAiStatus("Konuşmacı modeli %$progress…")
+                }
                 diarization.start()
 
-                modelManager.ensureStreamingEnglish { _ -> }
-                translator.prepareEnglishTurkish { _ -> }
-                streaming.start()
+                setAiStatus("Çoklu dil modeli hazırlanıyor…")
+                try {
+                    modelManager.ensureStreamingMultilingual { progress ->
+                        setAiStatus("Çoklu dil modeli %$progress…")
+                    }
+                    setAiStatus("Çoklu dil canlı ASR başlatılıyor…")
+                    streaming.start()
+                    multilingualStreamingActive = true
+                } catch (multiError: Throwable) {
+                    // Preserve the proven v1.6.1 English live-ASR path as a
+                    // safety net if the new multilingual model cannot load.
+                    setAiStatus("Çoklu dil başlatılamadı • İngilizce güvenli moda geçiliyor…")
+                    modelManager.ensureStreamingEnglish { progress ->
+                        setAiStatus("İngilizce güvenli ASR %$progress…")
+                    }
+                    englishFallbackStreaming.start()
+                    multilingualStreamingActive = false
+                }
+                translator.prepareEnglishTurkish { status ->
+                    setAiStatus(status)
+                }
+                setAiStatus(if (multilingualStreamingActive) "Çift yönlü canlı ASR başlatılıyor…" else "İngilizce canlı ASR başlatılıyor…")
 
                 ready = true
+                setAiStatus("AI HAZIR ✓")
                 withContext(Dispatchers.Main) {
-                    toast("AI CORE ✓ • STREAMING ✓ • EN → TR ✓")
+                    toast(if (multilingualStreamingActive) "AI CORE ✓ • MULTI-ASR ✓ • ÇİFT YÖNLÜ ✓" else "AI CORE ✓ • İNGİLİZCE ASR ✓ • GÜVENLİ MOD ✓")
                 }
             } catch (e: Exception) {
                 ready = false
+                setAiStatus("AI hazırlanamadı")
                 withContext(Dispatchers.Main) {
                     toast("Hazırlık hatası: ${e.message ?: e.javaClass.simpleName}")
                 }
@@ -463,7 +509,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun toggleMic() {
         if (!ready) {
-            toast("Önce ☰ menüsünden AI HAZIRLA.")
+            toast("AI hazırlanıyor…")
             return
         }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -489,7 +535,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun togglePhone() {
         if (!ready) {
-            toast("Önce ☰ menüsünden AI HAZIRLA.")
+            toast("AI hazırlanıyor…")
             return
         }
 
@@ -526,7 +572,11 @@ class MainActivity : AppCompatActivity() {
         try {
             diarization.addPcm16(pcm, sampleRate)
 
-            val result = streaming.acceptPcm16(pcm, sampleRate)
+            val result = if (multilingualStreamingActive) {
+                streaming.acceptPcm16(pcm, sampleRate)
+            } else {
+                englishFallbackStreaming.acceptPcm16(pcm, sampleRate)
+            }
             val partial = result.text.trim()
             val endpoint = result.endpoint
 
@@ -640,30 +690,63 @@ class MainActivity : AppCompatActivity() {
         val generation = conversationGeneration
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val translated = translator.translateEnglishToTurkish(text).trim()
+                val result = translator.translateConversationTurn(text, peerLanguage)
+                val translated = result.first.trim()
+                val route = result.second
                 if (translated.isBlank()) return@launch
+
+                if (route.source != "tr" && route.source != "und") {
+                    peerLanguage = route.source
+                }
 
                 withContext(Dispatchers.Main) {
                     if (generation != conversationGeneration) return@withContext
                     val turn = conversationTurns[sentenceId] ?: return@withContext
-                    // Ignore an older translation that finished after an AI merge/correction.
                     if (turn.translationRevision != revision || turn.original != text) return@withContext
+                    turn.sourceLanguage = route.source
+                    turn.targetLanguage = route.target
                     turn.translated = translated
+                    renderSourceHistory()
                     renderTranslationHistory()
 
                     if (speakEnabled && ttsReady) {
-                        previewTts?.speak(
-                            translated,
-                            TextToSpeech.QUEUE_ADD,
-                            null,
-                            "final_${sentenceId}_${System.currentTimeMillis()}"
-                        )
+                        val locale = localeForLanguage(route.target)
+                        if (locale != null) {
+                            val langResult = previewTts?.setLanguage(locale)
+                            if (langResult != TextToSpeech.LANG_MISSING_DATA && langResult != TextToSpeech.LANG_NOT_SUPPORTED) {
+                                previewTts?.speak(
+                                    translated,
+                                    TextToSpeech.QUEUE_ADD,
+                                    null,
+                                    "final_${sentenceId}_${System.currentTimeMillis()}"
+                                )
+                            }
+                        }
                     }
                 }
             } catch (_: Exception) {
                 // A later AI merge can retry the same sentence without blocking the UI.
             }
         }
+    }
+
+    private fun localeForLanguage(tag: String): Locale? = when (tag.lowercase()) {
+        "tr" -> Locale("tr", "TR")
+        "en" -> Locale.US
+        "es" -> Locale("es", "ES")
+        "fr" -> Locale("fr", "FR")
+        "de" -> Locale("de", "DE")
+        "it" -> Locale("it", "IT")
+        "pt" -> Locale("pt", "PT")
+        "ru" -> Locale("ru", "RU")
+        "ar" -> Locale("ar", "SA")
+        "hi" -> Locale("hi", "IN")
+        "ja" -> Locale("ja", "JP")
+        "ko" -> Locale("ko", "KR")
+        "nl" -> Locale("nl", "NL")
+        "uk" -> Locale("uk", "UA")
+        "vi" -> Locale("vi", "VN")
+        else -> null
     }
 
     private fun upsertTurn(
@@ -727,6 +810,7 @@ class MainActivity : AppCompatActivity() {
         previewTts?.stop()
         synchronized(aiPendingLock) { aiPendingEnglish = "" }
         pendingSentenceId = null
+        peerLanguage = null
         latestSentenceId = 0L
         lastPartialShown = ""
         lastPartialShownAt = 0L
@@ -740,8 +824,26 @@ class MainActivity : AppCompatActivity() {
         toast("Ekran temizlendi. Yeni konuya hazırsın.")
     }
 
+    private fun setAiStatus(status: String) {
+        aiStatus = status
+        runOnUiThread {
+            if (::aiStatusText.isInitialized) {
+                aiStatusText.text = status
+                aiStatusText.setTextColor(
+                    when {
+                        status.contains("HAZIR") -> Color.rgb(120, 245, 190)
+                        status.contains("hata", ignoreCase = true) || status.contains("hazırlanamadı", ignoreCase = true) -> Color.rgb(255, 140, 140)
+                        else -> Color.rgb(170, 230, 215)
+                    }
+                )
+            }
+        }
+    }
+
     private fun updateMenuState() {
-        menuButton.alpha = if (aiPreparing) 0.6f else 1f
+        runOnUiThread {
+            menuButton.alpha = if (aiPreparing) 0.6f else 1f
+        }
     }
 
     private fun normalize(value: String): String = value
@@ -758,6 +860,7 @@ class MainActivity : AppCompatActivity() {
         stopPhoneIfNeeded()
         StreamingHub.setListener(null)
         streaming.stop()
+        englishFallbackStreaming.stop()
         diarization.reset()
         diarization.release()
         previewTts?.stop()

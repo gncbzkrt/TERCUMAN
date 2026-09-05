@@ -17,7 +17,7 @@ import java.io.File
  * TERCÜMAN v1.3 AI Conversation Engine.
  *
  * The local LLM is deliberately used as a short-lived decision engine,
- * not as the translator. It decides whether a streaming ASR candidate
+ * not as the translator. It is language-neutral in v1.7. It decides whether a streaming ASR candidate
  * is a complete human-sized utterance, should wait for more speech,
  * or should be merged with the previous pending fragment.
  *
@@ -57,7 +57,7 @@ class AIConversationEngine(
 
         val prompt = """
 You are TERCÜMAN's sentence boundary controller.
-You receive English streaming speech recognition text.
+You receive streaming speech recognition text in any supported language.
 Your ONLY job is to decide whether the current spoken meaning unit is complete.
 
 Return EXACTLY one line in one of these forms:
@@ -87,7 +87,7 @@ $candidate
             val conversation = e.createConversation(
                 ConversationConfig(
                     systemInstruction = Contents.of(
-                        "You are a deterministic sentence boundary controller. Output only COMMIT, WAIT, or MERGE."
+                        "You are a deterministic multilingual sentence boundary controller. Output only COMMIT, WAIT, or MERGE."
                     ),
                     samplerConfig = SamplerConfig(
                         temperature = 0.0,

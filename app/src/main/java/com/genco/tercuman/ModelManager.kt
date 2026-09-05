@@ -19,6 +19,9 @@ class ModelManager(private val context: Context) {
         const val WHISPER_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin?download=true"
 
         const val STREAM_DIR = "sherpa-onnx-streaming-zipformer-en-20M-2023-02-17"
+        const val MULTI_STREAM_DIR = "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11"
+        const val MULTI_STREAM_ARCHIVE = "$MULTI_STREAM_DIR.tar.bz2"
+        const val MULTI_STREAM_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/$MULTI_STREAM_ARCHIVE"
         const val STREAM_ARCHIVE = "$STREAM_DIR.tar.bz2"
         const val STREAM_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/$STREAM_ARCHIVE"
 
@@ -40,6 +43,7 @@ class ModelManager(private val context: Context) {
     val modelRoot: File get() = File(context.filesDir, "models").apply { mkdirs() }
     val whisperFile: File get() = File(modelRoot, WHISPER_NAME)
     val streamingDir: File get() = File(modelRoot, STREAM_DIR)
+    val multilingualStreamingDir: File get() = File(modelRoot, MULTI_STREAM_DIR)
     val supertonicDir: File get() = File(modelRoot, SUPER_DIR)
     val aiDir: File get() = File(modelRoot, AI_DIR)
     val aiModelFile: File get() = File(aiDir, AI_MODEL_NAME)
@@ -51,6 +55,10 @@ class ModelManager(private val context: Context) {
         "encoder-epoch-99-avg-1.int8.onnx", "decoder-epoch-99-avg-1.onnx",
         "joiner-epoch-99-avg-1.int8.onnx", "tokens.txt"
     ).all { File(streamingDir, it).exists() && File(streamingDir, it).length() > 0 }
+
+    fun multilingualStreamingReady(): Boolean = listOf(
+        "encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"
+    ).all { File(multilingualStreamingDir, it).exists() && File(multilingualStreamingDir, it).length() > 0 }
     fun aiReady(): Boolean =
         aiModelFile.exists() && aiModelFile.length() > 300_000_000
 
@@ -83,6 +91,15 @@ class ModelManager(private val context: Context) {
         extractTarBz2(archive, modelRoot)
         archive.delete()
         check(streamingReady()) { "Streaming İngilizce modeli açılamadı." }
+    }
+
+    suspend fun ensureStreamingMultilingual(onProgress: (Int) -> Unit) = withContext(Dispatchers.IO) {
+        if (multilingualStreamingReady()) return@withContext
+        val archive = File(modelRoot, MULTI_STREAM_ARCHIVE)
+        download(MULTI_STREAM_URL, archive, onProgress)
+        extractTarBz2(archive, modelRoot)
+        archive.delete()
+        check(multilingualStreamingReady()) { "Çoklu dil streaming modeli açılamadı." }
     }
 
     suspend fun ensureWhisper(onProgress: (Int) -> Unit) = withContext(Dispatchers.IO) {

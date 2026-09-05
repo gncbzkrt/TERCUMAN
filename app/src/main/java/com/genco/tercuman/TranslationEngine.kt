@@ -45,6 +45,34 @@ class TranslationEngine {
         return withTimeout(10_000L) { languageId.identifyLanguage(text).await() }
     }
 
+    fun isSupportedLanguage(tag: String): Boolean =
+        TranslateLanguage.fromLanguageTag(tag) != null
+
+    suspend fun detectSupportedLanguage(text: String): String {
+        if (text.isBlank()) return "und"
+        return withTimeout(10_000L) { languageId.identifyLanguage(text).await() }
+    }
+
+    suspend fun translateConversationTurn(
+        text: String,
+        peerLanguage: String?,
+        onStatus: (String) -> Unit = {}
+    ): Pair<String, LanguageRoute> {
+        if (text.isBlank()) return "" to LanguageRoute("und", "tr")
+        val detected = detectSupportedLanguage(text)
+        val source = if (detected == "und") "en" else detected
+        if (source == "tr") {
+            val target = peerLanguage
+                ?.takeIf { it != "tr" && isSupportedLanguage(it) }
+                ?: "en"
+            return translateWith("tr", target, text, onStatus) to LanguageRoute("tr", target)
+        }
+
+        // First non-Turkish language becomes the peer language for the
+        // opposite direction. Foreign speech always goes to Turkish.
+        return translateWith(source, "tr", text, onStatus) to LanguageRoute(source, "tr")
+    }
+
     suspend fun toTurkish(text: String, onStatus: (String) -> Unit = {}): Pair<String, String> {
         if (text.isBlank()) return "" to "und"
 

@@ -10,12 +10,15 @@ import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig
 import java.io.File
 
 /**
- * TERCÜMAN v1.7.0 fallback streaming ASR (v1.6.1 stable path).
+ * TERCÜMAN v1.7 multilingual streaming ASR.
  *
- * Endpoint detection only tells the AI layer that a speech pause occurred.
- * It no longer makes linguistic sentence decisions.
+ * Uses the prompt-conditioned NVIDIA Nemotron 3.5 streaming model. The
+ * Android wrapper does not expose a per-stream language field yet, so the
+ * stream is intentionally created with the model's default empty language
+ * hint, which the model treats as automatic language detection.
+ * Turkish is supported by the model.
  */
-class StreamingEnglishEngine(private val modelDir: File) {
+class StreamingMultilingualEngine(private val modelDir: File) {
     data class Result(val text: String, val endpoint: Boolean)
 
     private var recognizer: OnlineRecognizer? = null
@@ -28,14 +31,13 @@ class StreamingEnglishEngine(private val modelDir: File) {
             featConfig = FeatureConfig(sampleRate = 16000, featureDim = 80),
             modelConfig = OnlineModelConfig(
                 transducer = OnlineTransducerModelConfig(
-                    encoder = File(modelDir, "encoder-epoch-99-avg-1.int8.onnx").absolutePath,
-                    decoder = File(modelDir, "decoder-epoch-99-avg-1.onnx").absolutePath,
-                    joiner = File(modelDir, "joiner-epoch-99-avg-1.int8.onnx").absolutePath
+                    encoder = File(modelDir, "encoder.int8.onnx").absolutePath,
+                    decoder = File(modelDir, "decoder.int8.onnx").absolutePath,
+                    joiner = File(modelDir, "joiner.int8.onnx").absolutePath
                 ),
                 tokens = File(modelDir, "tokens.txt").absolutePath,
                 numThreads = 2,
-                provider = "cpu",
-                modelType = "zipformer"
+                provider = "cpu"
             ),
             endpointConfig = EndpointConfig(
                 rule1 = EndpointRule(false, 0.55f, 0.0f),
@@ -58,12 +60,10 @@ class StreamingEnglishEngine(private val modelDir: File) {
 
         val floats = FloatArray(pcm.size) { pcm[it] / 32768.0f }
         s.acceptWaveform(floats, sampleRate)
-
         while (r.isReady(s)) r.decode(s)
 
         val text = r.getResult(s).text.trim()
         val endpoint = r.isEndpoint(s)
-
         if (endpoint) r.reset(s)
         return Result(text, endpoint)
     }
