@@ -10,35 +10,32 @@ import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig
 import java.io.File
 
 /**
- * TERCÜMAN v1.6 multilingual streaming ASR.
+ * TERCÜMAN v1.4.1 streaming ASR.
  *
- * Nemotron 3.5 ASR 0.6B is a local, prompt-conditioned streaming model.
- * It supports automatic language detection and Turkish plus major European
- * and other languages from one checkpoint. The language is selected per
- * stream; v1.6 starts each stream in auto mode so the conversation can switch
- * between Turkish and the other speaker's language without a manual toggle.
+ * Endpoint detection only tells the AI layer that a speech pause occurred.
+ * It no longer makes linguistic sentence decisions.
  */
-class StreamingMultilingualEngine(private val modelDir: File) {
+class StreamingEnglishEngine(private val modelDir: File) {
     data class Result(val text: String, val endpoint: Boolean)
 
     private var recognizer: OnlineRecognizer? = null
     private var stream: com.k2fsa.sherpa.onnx.OnlineStream? = null
 
     @Synchronized
-    fun start(language: String = "auto") {
+    fun start() {
         stop()
         val cfg = OnlineRecognizerConfig(
             featConfig = FeatureConfig(sampleRate = 16000, featureDim = 80),
             modelConfig = OnlineModelConfig(
                 transducer = OnlineTransducerModelConfig(
-                    encoder = File(modelDir, "encoder.int8.onnx").absolutePath,
-                    decoder = File(modelDir, "decoder.int8.onnx").absolutePath,
-                    joiner = File(modelDir, "joiner.int8.onnx").absolutePath
+                    encoder = File(modelDir, "encoder-epoch-99-avg-1.int8.onnx").absolutePath,
+                    decoder = File(modelDir, "decoder-epoch-99-avg-1.onnx").absolutePath,
+                    joiner = File(modelDir, "joiner-epoch-99-avg-1.int8.onnx").absolutePath
                 ),
                 tokens = File(modelDir, "tokens.txt").absolutePath,
                 numThreads = 2,
                 provider = "cpu",
-                modelType = "nemo_transducer"
+                modelType = "zipformer"
             ),
             endpointConfig = EndpointConfig(
                 rule1 = EndpointRule(false, 0.55f, 0.0f),
@@ -50,7 +47,7 @@ class StreamingMultilingualEngine(private val modelDir: File) {
             maxActivePaths = 4
         )
         recognizer = OnlineRecognizer(null, cfg)
-        stream = recognizer!!.createStream().also { it.setOption("language", language) }
+        stream = recognizer!!.createStream()
     }
 
     @Synchronized

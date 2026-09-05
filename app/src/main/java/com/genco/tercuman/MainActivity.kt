@@ -29,7 +29,7 @@ import kotlinx.coroutines.withContext
 import java.util.Locale
 
 /**
- * TERCÜMAN v1.6.0
+ * TERCÜMAN v1.6.1
  *
  * Main-screen philosophy:
  * - Fixed application boundary/header.
@@ -46,7 +46,7 @@ import java.util.Locale
  */
 class MainActivity : AppCompatActivity() {
     private lateinit var modelManager: ModelManager
-    private lateinit var streaming: StreamingMultilingualEngine
+    private lateinit var streaming: StreamingEnglishEngine
     private lateinit var translator: TranslationEngine
     private lateinit var micChunker: MicrophoneChunker
     private lateinit var diarization: SpeakerDiarizationEngine
@@ -65,14 +65,13 @@ class MainActivity : AppCompatActivity() {
     private var phoneOn = false
     private var ready = false
     private var aiPreparing = false
-    private var pendingSpeech = ""
-    private val pendingSpeechLock = Any()
+    private var aiPendingEnglish = ""
+    private val aiPendingLock = Any()
     private var latestSentenceId = 0L
     private val audioMutex = kotlinx.coroutines.sync.Mutex()
     private var translationTextSize = 20f
     private var pendingSentenceId: Long? = null
     private var conversationGeneration = 0L
-    @Volatile private var lastForeignLanguage = "en"
 
     /** Future-proof turn model: source/target are not hard-coded in the UI. */
     private data class ConversationTurn(
@@ -113,7 +112,7 @@ class MainActivity : AppCompatActivity() {
         diarization = SpeakerDiarizationEngine(this, modelManager.modelRoot)
         aiCore = AIConversationEngine(this, modelManager.aiModelFile)
         translator = TranslationEngine()
-        streaming = StreamingMultilingualEngine(modelManager.streamingDir)
+        streaming = StreamingEnglishEngine(modelManager.streamingDir)
         micChunker = MicrophoneChunker(this) { pcm, rate ->
             StreamingHub.emit(pcm, rate)
         }
@@ -377,7 +376,7 @@ class MainActivity : AppCompatActivity() {
         panel.addView(sizeRow)
 
         val languageInfo = text(
-            "🌐 Dil: OTOMATİK • A↔B ÇİFT YÖNLÜ\nİlk konuşmada yabancı dil öğrenilir",
+            "🌐 Dil: OTOMATİK • çift yönlü mimari hazır\nİlk akış: İngilizce → Türkçe",
             11f,
             Color.rgb(170, 184, 197)
         ).apply {
@@ -442,13 +441,13 @@ class MainActivity : AppCompatActivity() {
                 modelManager.ensureDiarization { _ -> }
                 diarization.start()
 
-                modelManager.ensureStreamingMultilingual { _ -> }
+                modelManager.ensureStreamingEnglish { _ -> }
                 translator.prepareEnglishTurkish { _ -> }
-                streaming.start("auto")
+                streaming.start()
 
                 ready = true
                 withContext(Dispatchers.Main) {
-                    toast("AI CORE ✓ • MULTILINGUAL STREAMING ✓ • AUTO A↔B ✓")
+                    toast("AI CORE ✓ • STREAMING ✓ • EN → TR ✓")
                 }
             } catch (e: Exception) {
                 ready = false
@@ -554,7 +553,7 @@ class MainActivity : AppCompatActivity() {
              * A sentence gets a visible identity immediately. Translation starts
              * now; AI analysis runs beside it and may merge/correct this same turn.
              */
-            val pendingBefore = synchronized(pendingSpeechLock) { pendingSpeech }
+            val pendingBefore = synchronized(aiPendingLock) { aiPendingEnglish }
             val combined = listOf(pendingBefore, candidate)
                 .filter { it.isNotBlank() }
                 .joinToString(" ")
@@ -562,14 +561,14 @@ class MainActivity : AppCompatActivity() {
 
             val sentenceId = pendingSentenceId ?: (++latestSentenceId)
             pendingSentenceId = sentenceId
-            synchronized(pendingSpeechLock) { pendingSpeech = combined }
+            synchronized(aiPendingLock) { aiPendingEnglish = combined }
 
             withContext(Dispatchers.Main) {
                 upsertTurn(
                     sentenceId = sentenceId,
                     original = combined,
                     translated = "",
-                    sourceLanguage = "und",
+                    sourceLanguage = "en",
                     targetLanguage = "tr"
                 )
                 sourceLiveText.text = ""
@@ -577,7 +576,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             // Translation is intentionally independent of AI.
-            scheduleTranslationAuto(combined, sentenceId)
+            scheduleTranslation(combined, sentenceId)
 
             // AI sentence-boundary analysis is intentionally independent as well.
             val generation = conversationGeneration
@@ -591,14 +590,14 @@ class MainActivity : AppCompatActivity() {
                     if (generation != conversationGeneration) return@launch
                     when (decision.action) {
                         AIConversationEngine.Action.WAIT -> {
-                            synchronized(pendingSpeechLock) { pendingSpeech = combined }
+                            synchronized(aiPendingLock) { aiPendingEnglish = combined }
                         }
 
                         AIConversationEngine.Action.COMMIT -> {
                             val stable = normalize(decision.sentence.ifBlank { combined })
                             if (stable.isBlank()) return@launch
 
-                            synchronized(pendingSpeechLock) { pendingSpeech = "" }
+                            synchronized(aiPendingLock) { aiPendingEnglish = "" }
                             pendingSentenceId = null
 
                             val current = conversationTurns[sentenceId]
@@ -609,7 +608,7 @@ class MainActivity : AppCompatActivity() {
                                 withContext(Dispatchers.Main) {
                                     renderSourceHistory()
                                 }
-                                scheduleTranslationAuto(stable, sentenceId)
+                                scheduleTranslation(stable, sentenceId)
                             }
 
                             lifecycleScope.launch(Dispatchers.Default) {
@@ -636,39 +635,23 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun scheduleTranslationAuto(text: String, sentenceId: Long) {
+    private fun scheduleTranslation(text: String, sentenceId: Long) {
         val revision = conversationTurns[sentenceId]?.translationRevision ?: return
         val generation = conversationGeneration
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                // Language identification is cheap enough to run after an
-                // endpoint and keeps the streaming ASR path completely free.
-                val detected = translator.detectLanguage(text).lowercase().
-                    substringBefore('-').let { if (it == "und" || it.isBlank()) "en" else it }
-
-                if (detected != "tr") lastForeignLanguage = detected
-                val target = if (detected == "tr") lastForeignLanguage else "tr"
-
-                if (detected == target) return@launch
-                val translated = translator.translate(
-                    text,
-                    TranslationEngine.LanguageRoute(detected, target)
-                ).trim()
+                val translated = translator.translateEnglishToTurkish(text).trim()
                 if (translated.isBlank()) return@launch
 
                 withContext(Dispatchers.Main) {
                     if (generation != conversationGeneration) return@withContext
                     val turn = conversationTurns[sentenceId] ?: return@withContext
+                    // Ignore an older translation that finished after an AI merge/correction.
                     if (turn.translationRevision != revision || turn.original != text) return@withContext
-                    turn.sourceLanguage = detected
-                    turn.targetLanguage = target
                     turn.translated = translated
-                    renderSourceHistory()
                     renderTranslationHistory()
 
                     if (speakEnabled && ttsReady) {
-                        val locale = Locale(target)
-                        previewTts?.setLanguage(locale)
                         previewTts?.speak(
                             translated,
                             TextToSpeech.QUEUE_ADD,
@@ -742,7 +725,7 @@ class MainActivity : AppCompatActivity() {
     private fun clearConversation() {
         conversationGeneration++
         previewTts?.stop()
-        synchronized(pendingSpeechLock) { pendingSpeech = "" }
+        synchronized(aiPendingLock) { aiPendingEnglish = "" }
         pendingSentenceId = null
         latestSentenceId = 0L
         lastPartialShown = ""
