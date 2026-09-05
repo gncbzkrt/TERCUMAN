@@ -18,7 +18,7 @@ class ModelManager(private val context: Context) {
         const val WHISPER_NAME = "ggml-base.bin"
         const val WHISPER_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin?download=true"
 
-        const val STREAM_DIR = "sherpa-onnx-streaming-zipformer-en-20M-2023-02-17"
+        const val STREAM_DIR = "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-320ms-int8-2026-06-11"
         const val STREAM_ARCHIVE = "$STREAM_DIR.tar.bz2"
         const val STREAM_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/$STREAM_ARCHIVE"
 
@@ -48,8 +48,8 @@ class ModelManager(private val context: Context) {
 
     fun whisperReady(): Boolean = whisperFile.exists() && whisperFile.length() > 100_000_000
     fun streamingReady(): Boolean = listOf(
-        "encoder-epoch-99-avg-1.int8.onnx", "decoder-epoch-99-avg-1.onnx",
-        "joiner-epoch-99-avg-1.int8.onnx", "tokens.txt"
+        "encoder.int8.onnx", "decoder.int8.onnx",
+        "joiner.int8.onnx", "tokens.txt"
     ).all { File(streamingDir, it).exists() && File(streamingDir, it).length() > 0 }
     fun aiReady(): Boolean =
         aiModelFile.exists() && aiModelFile.length() > 300_000_000
@@ -76,13 +76,13 @@ class ModelManager(private val context: Context) {
         }
     }
 
-    suspend fun ensureStreamingEnglish(onProgress: (Int) -> Unit) = withContext(Dispatchers.IO) {
+    suspend fun ensureStreamingMultilingual(onProgress: (Int) -> Unit) = withContext(Dispatchers.IO) {
         if (streamingReady()) return@withContext
         val archive = File(modelRoot, STREAM_ARCHIVE)
         download(STREAM_URL, archive, onProgress)
         extractTarBz2(archive, modelRoot)
         archive.delete()
-        check(streamingReady()) { "Streaming İngilizce modeli açılamadı." }
+        check(streamingReady()) { "Streaming çoklu dil modeli açılamadı." }
     }
 
     suspend fun ensureWhisper(onProgress: (Int) -> Unit) = withContext(Dispatchers.IO) {

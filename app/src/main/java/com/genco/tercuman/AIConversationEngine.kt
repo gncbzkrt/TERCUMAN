@@ -57,7 +57,7 @@ class AIConversationEngine(
 
         val prompt = """
 You are TERCÜMAN's sentence boundary controller.
-You receive English streaming speech recognition text.
+You receive streaming speech recognition text in any supported language.
 Your ONLY job is to decide whether the current spoken meaning unit is complete.
 
 Return EXACTLY one line in one of these forms:
