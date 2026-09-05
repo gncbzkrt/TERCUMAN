@@ -16,6 +16,8 @@ import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
@@ -27,7 +29,7 @@ import kotlinx.coroutines.withContext
 import java.util.Locale
 
 /**
- * TERCÜMAN v1.4.0
+ * TERCÜMAN v1.4.1
  *
  * Main-screen philosophy:
  * - Fixed application boundary/header.
@@ -100,6 +102,11 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Android 15+ enforces edge-to-edge for targetSdk 35. Keep the app
+        // edge-to-edge, but explicitly inset the fixed app header/content so
+        // the logo and menu never sit underneath the status bar.
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+
         modelManager = ModelManager(this)
         diarization = SpeakerDiarizationEngine(this, modelManager.modelRoot)
         aiCore = AIConversationEngine(this, modelManager.aiModelFile)
@@ -109,7 +116,14 @@ class MainActivity : AppCompatActivity() {
             StreamingHub.emit(pcm, rate)
         }
 
-        setContentView(buildUi())
+        val ui = buildUi()
+        ViewCompat.setOnApplyWindowInsetsListener(ui) { view, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.setPadding(view.paddingLeft, bars.top, view.paddingRight, bars.bottom)
+            insets
+        }
+        setContentView(ui)
+        ViewCompat.requestApplyInsets(ui)
         initPreviewTts()
         requestBasePermissions()
 
@@ -188,7 +202,7 @@ class MainActivity : AppCompatActivity() {
             contentDescription = "TERCÜMAN menüsü"
             setOnClickListener { showControlMenu() }
         }
-        header.addView(menuButton, LinearLayout.LayoutParams(dp(48), dp(42)))
+        header.addView(menuButton, LinearLayout.LayoutParams(dp(48), dp(48)))
         root.addView(header, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             dp(50)
@@ -519,7 +533,7 @@ class MainActivity : AppCompatActivity() {
 
             if (!endpoint) {
                 val now = System.currentTimeMillis()
-                if (partial != lastPartialShown && now - lastPartialShownAt >= 300L) {
+                if (partial != lastPartialShown && now - lastPartialShownAt >= 120L) {
                     lastPartialShown = partial
                     lastPartialShownAt = now
                     withContext(Dispatchers.Main) {

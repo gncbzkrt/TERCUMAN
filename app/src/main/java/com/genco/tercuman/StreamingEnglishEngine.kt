@@ -10,7 +10,7 @@ import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig
 import java.io.File
 
 /**
- * TERCÜMAN v1.3 streaming ASR.
+ * TERCÜMAN v1.4.1 streaming ASR.
  *
  * Endpoint detection only tells the AI layer that a speech pause occurred.
  * It no longer makes linguistic sentence decisions.
@@ -39,7 +39,7 @@ class StreamingEnglishEngine(private val modelDir: File) {
             ),
             endpointConfig = EndpointConfig(
                 rule1 = EndpointRule(false, 0.55f, 0.0f),
-                rule2 = EndpointRule(true, 0.45f, 0.0f),
+                rule2 = EndpointRule(true, 0.32f, 0.0f),
                 rule3 = EndpointRule(false, 0.0f, 12.0f)
             ),
             enableEndpoint = true,

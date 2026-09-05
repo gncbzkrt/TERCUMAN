@@ -46,10 +46,10 @@ jobs:
       - name: APK'yı hazırla
         run: |
           mkdir -p out
-          cp app/build/outputs/apk/debug/app-debug.apk out/TERCUMAN-v1.4.0-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk out/TERCUMAN-v1.4.1-debug.apk
 
       - name: APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: TERCUMAN-v1.4.0-APK
-          path: out/TERCUMAN-v1.4.0-debug.apk
+          name: TERCUMAN-v1.4.1-APK
+          path: out/TERCUMAN-v1.4.1-debug.apk
